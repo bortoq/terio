@@ -1,55 +1,53 @@
 # Use Cases
 
+Все сценарии terio работают по одному принципу: пользователь вводит задачу, terio исполняет shell-команды и рендерит результат. Повторяющиеся сценарии компилируются в рецепты.
+
 ## FLAC/CUE Album Split
 
-A user asks terio to split an album image into tracks. The agent identifies the FLAC file, CUE file, naming pattern, and output directory. The first runs are handled through normal tools such as `ffmpeg`, `shnsplit`, `cuetag`, or equivalent local commands.
+Пользователь просит terio разделить образ альбома на треки. terio находит FLAC и CUE файлы в текущей директории. Первые запуски обрабатываются через агента, который генерирует нужные ffmpeg-команды. После нескольких успешных повторений Behavior Compiler сохраняет параметризованный рецепт.
 
-After the same workflow succeeds several times, Behavior Compiler saves a parameterized recipe. Later, the user can ask the same thing in natural language and terio runs the recipe directly without an LLM call.
+В следующий раз terio запускает рецепт без LLM, валидирует аргументы и показывает таблицу треков как рендеренный блок.
+
+**Что делает terio:** `ffmpeg` + табличный рендеринг + рецепт.
 
 ## Missing Episode In A Season
 
-A user asks which episode is missing from a show season. terio inspects the local folder or media library, compares existing files to expected episode numbers, and uses a configured downloader or indexer to fetch the missing item.
+Пользователь спрашивает, какой эпизод отсутствует в сезоне. terio запускает `ls` для инспекции файлов, сравнивает с ожидаемой нумерацией (простая shell-логика), и вызывает агента для генерации команды скачивания.
 
-The result is shown as a structured season table: present episodes, missing episodes, download status, and final file location.
+Результат — таблица: какие эпизоды есть, каких нет, статус загрузки.
+
+**Что делает terio:** `ls`/`find` + табличный рендеринг + агент для команды загрузки.
 
 ## Resume Last Playlist
 
-A user asks to play music from the last listened playlist. terio connects to the configured local player or service API, resumes the queue, shows the current track, and exposes keyboard controls.
+Пользователь просит продолжить последний плейлист. terio читает конфиг плеера (например, mpv), запускает `mpv --playlist=...` и показывает текущий трек как карточку с элементами управления (следующий/пауза — те же hotkeys, что в mpv).
 
-The terminal becomes a media controller without forcing the user to open a separate music app.
+**Что делает terio:** shell-команда (`mpv`) + рендеринг текущего состояния.
 
 ## File Copy With Visual Progress
 
-A user copies a large directory. terio runs the file operation, shows progress as a readable card, displays throughput, skipped files, warnings, and final destination, then offers a quick action to open or inspect the result.
+Пользователь копирует большую директорию. terio запускает `rsync --progress` и парсит stdout для отображения прогресс-бара. После завершения — карточка с итогом: скорость, пропущенные файлы, предупреждения.
 
-The underlying operation remains a normal local command. The interface improves visibility.
+**Что делает terio:** `rsync` + рендеринг прогресса.
 
 ## GitHub Work Session
 
-A user asks what needs attention in a repository. terio fetches issues, pull requests, notifications, CI status, and local branch state. The result appears as a prioritized work feed with links to actions.
+Пользователь спрашивает, что требует внимания в репозитории. terio выполняет `gh issue list`, `gh pr list`, `git status` и рендерит результат как приоритизированную ленту.
 
-The user can review a PR, run tests, push a branch, and create a summary without switching between terminal, browser, and GitHub UI.
+Пользователь может просмотреть PR, запустить тесты, запуштить ветку — всё через shell-команды, без выхода из terio.
+
+**Что делает terio:** `gh` + `git` + рендеринг ленты.
 
 ## Browser-Like News Reading
 
-A user asks for news or updates on a topic. terio retrieves sources through configured feeds or search connectors and renders the result as a long readable page.
+Пользователь просит новости на тему. terio через `curl` или `yt-dlp` получает контент, агент форматирует его, и результат показывается как длинная читаемая страница.
 
-This uses the terminal's natural autoscroll and history while adopting the browser's readability.
-
-## Modal Editing
-
-A user opens a text file, config file, cue sheet, subtitle, or script from command output. terio switches from command mode to edit mode in the same workspace.
-
-The user edits, saves, returns to command mode, and continues the workflow without changing applications.
-
-## Shared Terminal Block
-
-A user wants another person to see the result of a command, a log, a rendered report, or a workflow status. terio shares only the selected block or session area, not the whole machine.
-
-This supports collaboration without making full terminal sharing the default.
+**Что делает terio:** `curl`/`yt-dlp` + рендеринг страницы.
 
 ## Cost-Saving Routine
 
-A user repeatedly asks for the same task through the agent. terio notices the repeated structure, compiles the behavior, and later shows that the task used zero LLM tokens.
+Пользователь регулярно повторяет один и тот же запрос через агента. terio замечает повторяющуюся структуру в логе, компилирует рецепт. При следующем запросе terio показывает: «Выполнено по рецепту. Сэкономлено X токенов и Y секунд».
 
-The product makes savings visible: avoided calls, time saved, and successful replays.
+## Ключевой принцип
+
+terio **не встраивает** GitHub, медиаплеер, браузер или менеджер загрузок. terio **исполняет их shell-команды** и **рендерит их вывод**. Повторяющиеся цепочки команд **кешируются как рецепты**. Три функции — и всё.

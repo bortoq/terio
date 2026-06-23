@@ -1,80 +1,103 @@
 # terio
 
-terio is a terminal-based standalone interface for controlling local tools, web services, files, media, agents, and APIs from one workspace.
+**Интерфейсный агрегатор. Терминал + рендеринг вывода + кеширование поведения на уровне интерфейса.**
 
-## Simple Description
+terio — это не «терминал с браузером и агентом». Это **единое место управления**, где:
 
-terio keeps the command-line power of a terminal, but renders results like a web interface. Commands can produce tables, cards, galleries, timelines, previews, controls, and long readable pages instead of plain scrolling text.
+1. **Терминал** — вы выполняете любые команды, как в обычном shell.
+2. **Рендеринг вывода** — результат любой команды может быть показан как свёрстанная веб-страница: таблицы, карточки, таймлайны, галереи, прогресс-бары, читаемые лонгриды.
+3. **Кеширование поведения на уровне интерфейса** — terio запоминает, как вы решаете повторяющиеся задачи, и превращает их в готовые скрипты-рецепты. Следующий раз — без вызова LLM, без повторения ручных шагов.
 
-The product also learns repeated user behavior. If a user repeatedly asks for the same workflow, such as splitting a FLAC/CUE album, renaming tracks, copying files, resuming a playlist, or downloading a missing episode, terio can compile that workflow into a trusted script and run it next time without spending LLM tokens.
+Это **агрегатор интерфейса**, а не набор коннекторов. terio не встраивает GitHub, медиаплеер, файловый менеджер или браузер. terio даёт единую командную поверхность и единое место просмотра результатов. Всё остальное (работа с файлами, медиа, Git, GitHub, новости, базы данных) — это обычные shell-команды, которые terio умеет исполнять и **рендерить**. Повторяющиеся последовательности таких команд terio **кеширует и автоматизирует**.
 
-## Full Description
+## Чем terio не является
 
-Most software forces the user to move between many separate interfaces: terminal, browser, file manager, editor, media player, service dashboards, and AI agent UIs. Each interface has its own commands, layout, shortcuts, state, and mental model. The user pays for that fragmentation with attention.
+- Не «терминал + браузер + агент + файловый менеджер + медиацентр + GitHub UI + workflow automation platform». Всё, кроме терминала, рендеринга и кеширования поведения — артефакты работы LLM-агента, который делал первоначальный набросок.
+- Не замена ОС, Photoshop или всего софта сразу.
+- Не low-code платформа для построения автоматизаций.
 
-terio treats the interface as its own layer. Programs, services, APIs, local tools, and agents remain separate execution engines. terio becomes the user's command surface and result surface. The user asks for an outcome, the right engine performs the work, and the terminal displays the result in the form that fits the task.
+## Как это работает
 
-This makes the terminal more than a shell emulator. It becomes an aggregator of control: a browser-like renderer, an agent interface, a workflow recorder, a modal workspace, and a bridge to local and remote functions.
+Пользователь (разработчик, DevOps, power user, кто уже работает в командной строке) открывает terio. Вводит команду — любую: `ls`, `git log`, `ffmpeg -i ...`, `curl ...`, `npm test`. terio исполняет её в локальном shell и **рендерит результат** вместо того чтобы вывалить сырой текст.
+
+Если terio замечает, что пользователь повторяет одну и ту же последовательность (например, «нарезать FLAC/CUE → переименовать дорожки → скопировать в Music»), он предлагает сохранить её как **рецепт**. Рецепт — это параметризованный скрипт с проверками, валидацией аргументов и указанием уровня риска. Как только рецепт набирает достаточную историю успешных запусков, terio выполняет его без LLM, мгновенно и дёшево.
+
+**Activation moment** наступает, когда пользователь замечает:
+- переключения между программами исчезли (всё в одном окне);
+- повторяющиеся задачи больше не требуют его внимания;
+- LLM-токены тратятся только на то, что действительно требует рассуждения.
+
+## Для кого terio
+
+- Пользователи командной строки (Linux/macOS power users, разработчики, DevOps).
+- Пользователи агентных тулов (OpenCode, Codex), которым нужен единый интерфейс для shell и агента.
+- Все, кто устал переключаться между терминалом, браузером, редактором, CI-дашбордом и медиаплеером.
 
 ## Product Principle
 
-User attention is the scarce resource. Every app switch, repeated command, hidden menu, manual copy step, and unnecessary LLM call has a cost. terio should reduce that cost without asking the user to learn a new automation language.
-
-## Market Context
-
-Existing terminals are powerful but mostly text-first. Existing AI terminals add natural language help, but still tend to output blocks of plain text and rerun reasoning for repeated tasks. Existing browsers are excellent renderers, but weak command surfaces. Existing automation tools require users to design workflows in advance.
-
-terio sits between terminals, browsers, and AI agent interfaces. It keeps terminal control, adds browser-grade rendering, and uses an agent only where reasoning is needed. Repeated behavior should become cheaper and faster over time.
-
-## Main Use Cases
-
-- Copy files, inspect results, and see structured progress without leaving the terminal.
-- Split FLAC/CUE albums, rename tracks with a remembered template, and reuse the workflow without another LLM call.
-- Resume the last playlist, show the queue, and control playback from the same workspace.
-- Detect and download a missing episode in a show season using local library state and configured services.
-- Review GitHub issues, branches, commits, pull requests, and CI output as readable cards and timelines.
-- Ask for news, logs, or search results and read them as a long browser-like page.
-- Edit text, inspect media, query databases, and run commands through modal workspace views.
-- Share part of a terminal session with another user or team when collaboration is useful.
+User attention is the scarce resource. Каждое переключение, повторение, ручной шаг и лишний LLM-вызов имеют цену. terio снижает эту цену, не требуя от пользователя учить новый язык автоматизации.
 
 ## MVP
 
-- Local terminal shell with command execution.
-- Web-rendered output blocks for a small set of commands.
-- Agent command entry for natural-language tasks.
-- Behavior log that records request, command chain, result, and errors.
-- Behavior Compiler prototype for one safe repeated workflow.
-- Trust threshold before automatic script replay.
-- Explicit fallback to agent reasoning when confidence is low or a compiled script fails.
-- Basic modal views for command, file preview, and rendered output.
+**Цель:** доказать, что terio может выполнить shell-команду, отрендерить результат как веб-блок и превратить повторяемый workflow в безопасный локальный рецепт.
+
+Что входит:
+- Исполнение shell-команд в текущей директории.
+- Рендеринг результата как таблица/карточка (для одного workflow).
+- Лог поведения (Behavior Log) в JSONL.
+- Один рецепт: FLAC/CUE сплит (или другой безопасный локальный сценарий).
+- Ручное подтверждение перед реплеем рецепта.
+- Валидация аргументов и прекондишенов.
+- Fallback: если рецепт невалиден, показать ошибку и предложить ручной режим.
+
+Что НЕ входит в MVP:
+- Коннекторы к GitHub, медиа, браузеру.
+- Modal workspace с редактором.
+- Шэринг сессий.
+- Маркетплейс рецептов.
+- Cloud sync.
+- Team features.
+
+## Статус
+
+**Concept / pre-MVP.** В репозитории — документация и архитектурная спецификация. Исполняемого кода пока нет.
+
+## Стек
+
+**Rust** — основной язык разработки. CLI-first.
 
 ## Similar Projects And Difference
 
-- Plan 9 pursued a unified computing environment, but required a different system model. terio should work on top of existing systems.
-- TermKit explored browser-like terminal output, but lacked modern agents and behavior compilation.
-- Hyper proved that terminals can be built with web technology, but did not redefine the terminal as a control layer.
-- Extraterm treated command output as objects, but did not combine this with agentic workflow learning.
-- Warp added AI to the terminal, but terio's core bet is broader: web rendering, compiled behavior, modal workspace, and interface aggregation.
-- Blink Shell demonstrates mobile terminal workflows and Mosh support, but is not a browser-like agentic workspace.
+- **Warp** добавил AI в терминал, но не делает рендеринг вывода и кеширование поведения.
+- **Hyper** показал, что терминал может быть веб-технологией, но не переопределил его как слой управления.
+- **Extraterm** представил вывод как объекты, но без компиляции поведения.
+- **OpenCode / Codex** — агентные тулы для работы с кодом, но не терминальные интерфейсы и не агрегаторы.
+- **Plan 9** пытался унифицировать вычислительную среду, но требовал другой ОС.
 
-The main difference is that terio is not only a nicer terminal. It is a standalone interface layer between the user and executable functions.
+Главное отличие: terio — это **выделенный интерфейсный слой** между пользователем и любыми исполняемыми функциями, а не просто улучшенный терминал.
 
-## Risks
+## Risk Taxonomy
 
-- The concept can become too broad unless the MVP proves one narrow workflow first.
-- Full browser, editor, media, and agent integration can overload the product if built too early.
-- Automatic replay of commands requires strict trust, argument validation, logging, and fallback.
-- GUI-heavy programs whose interface and engine are tightly coupled may not be practical integration targets.
-- Users may not understand the product if it is described as replacing every app. It should start by saving attention in concrete repeated workflows.
+| Класс | Пример | Действие по умолчанию |
+|-------|--------|----------------------|
+| `read_only` | `ls`, `git status`, `cat` | Без подтверждения |
+| `local_write` | Создание/изменение файлов | Подтверждение при первом запуске рецепта |
+| `destructive` | Удаление, перезапись, `rm -rf` | Всегда запрос |
+| `network_read` | `curl`, `wget` | Без подтверждения (кроме рецептов) |
+| `network_write` | `git push`, `POST` API | Всегда запрос |
+| `credential_access` | Работа с токенами, ключами | Всегда запрос, не логировать |
+| `financial` | Платежи, покупки | Всегда запрос |
 
 ## Monetization
 
-- Freemium local app with limited agent minutes or compiled workflows.
-- Paid tier for more agent usage, workflow history, cloud sync, and advanced connectors.
-- Team tier for shared sessions, shared workflow libraries, and audit logs.
-- Marketplace or registry for connector packs and reusable behavior templates.
-- Cost-savings display that shows avoided LLM calls and time saved by compiled workflows.
+- Freemium local app с ограничением по числу рецептов или agent-минутам.
+- Paid tier: больше рецептов, история, расширенные коннекторы.
+- Cost-savings display: сколько LLM-вызовов и времени сэкономлено.
 
-## Documents
+## Документы
 
-See [roadmap.md](roadmap.md), [architecture.md](architecture.md), [use-cases.md](use-cases.md), and [demo.md](demo.md).
+- [Vision / MVP](docs/mvp.md) — жёсткий scope первого прототипа.
+- [Architecture](architecture.md) — компоненты и data flow.
+- [Roadmap](roadmap.md) — фазы развития.
+- [Use Cases](use-cases.md) — сценарии использования.
+- [Trust Model](docs/trust-model.md) — модель доверия и безопасности.

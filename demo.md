@@ -1,56 +1,88 @@
 # Demo
 
-## Scenario: Repeated Media Workflow Becomes Cheap
+## Сценарий: повторяемый медиа-workflow становится дешёвым
 
-A user has a folder with a FLAC file and a CUE file. The user wants the album split into tracks, tagged, and renamed according to the same pattern used in previous sessions.
+### Первый запуск
 
-## First Manual Workflow
+В директории пользователя есть FLAC-файл и CUE-файл:
 
-The user asks:
+```
+/home/user/music/
+  album.flac
+  album.cue
+```
 
-`split this flac/cue album into tracks and name them like last time`
+Пользователь вводит:
+
+```
+terio ask "split this flac/cue album into tracks"
+```
+
+Поскольку рецепта ещё нет, terio передаёт запрос агенту. Агент генерирует команду:
+
+```
+ffmpeg -i album.flac -i album.cue -map 0:0 -c copy -f segment ...
+```
 
 terio:
+- исполняет команду;
+- показывает прогресс в реальном времени;
+- после завершения рендерит таблицу треков;
+- записывает лог: request, команда, результат, exit code.
 
-- identifies the FLAC and CUE files in the current directory;
-- asks for confirmation if multiple candidates exist;
-- runs the required local commands;
-- shows progress as a rendered card;
-- displays a final table with track number, title, duration, filename, and status;
-- records the request, arguments, commands, result, and errors in the Behavior Log.
+### Распознавание паттерна
 
-## Pattern Recognition
+После 3 успешных выполнений (с разными файлами) Behavior Compiler обнаруживает стабильный паттерн:
 
-After the workflow succeeds enough times with similar structure, Behavior Compiler detects a stable behavior:
+```
+ffmpeg -i <flac> -i <cue> ... → split tracks
+```
 
-`split album image -> tag tracks -> rename files -> verify output`
+terio предлагает пользователю сохранить рецепт:
 
-The variable arguments are:
+```
+ terio  Pattern detected: "Split FLAC/CUE album"
+  Run 1: album.flac → 12 tracks (success)
+  Run 2: best_of.flac → 8 tracks (success)
+  Run 3: live.flac → 6 tracks (success)
 
-- source audio file;
-- cue sheet;
-- output directory;
-- naming template.
+  Save as recipe? [Y/n] (show trace)
+```
 
-## Replay
+### Реплей рецепта
 
-Next time the user asks the same kind of request, terio does not call the LLM if confidence is high enough.
+На четвёртый раз пользователь вводит ту же просьбу. terio:
 
-It extracts the current arguments, validates that files exist, runs the compiled recipe, and shows the rendered result. If validation fails or the script exits with an error, terio downgrades confidence and falls back to the agent.
+1. Находит готовый рецепт.
+2. Валидирует аргументы (файлы существуют, ffmpeg установлен).
+3. Показывает трейс команд.
+4. Спрашивает подтверждение (risk: local_write).
+5. Исполняет без LLM.
+6. Рендерит таблицу.
 
-## Web Rendering
+### Отказ рецепта
 
-The output is not a raw wall of terminal text. The user sees:
+Если файл не найден или ffmpeg не установлен, terio показывает:
 
-- a progress block while files are being generated;
-- a track table after completion;
-- warning cards for missing tags or suspicious filenames;
-- quick actions for opening the folder, playing the album, or rerunning with a different template.
+```
+ Recipe failed: precondition not met
+   - ffmpeg: found ✓
+   - album.flac: NOT FOUND ✗
 
-## Modal Continuation
+  Falling back to manual mode.
+```
 
-If the user opens the CUE sheet or renaming template, terio switches to edit mode in the same workspace. After saving, the user returns to command mode and reruns the workflow.
+Пользователь может исправить путь и запустить `terio rerun`.
 
-## Demo Goal
+### Цель демо
 
-The first demo should prove one behavior: a normal terminal workflow can become a trusted compiled behavior that runs faster, costs less, and displays results more clearly than a plain terminal session.
+Первый рабочий прототип доказывает: обычный терминальный workflow превращается в доверенный рецепт, который выполняется быстрее, стоит дешевле и показывает результат понятнее, чем сырой terminal.
+
+### Что НЕ в демо
+
+- ❌ Встроенный GitHub UI.
+- ❌ Медиаплеер внутри terio.
+- ❌ Редактор файлов.
+- ❌ Шэринг сессий.
+
+Только shell → render → behavior cache.

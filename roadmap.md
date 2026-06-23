@@ -1,68 +1,94 @@
 # Roadmap
 
-## Phase 1: Product Definition
+## Фаза 0: Определение и прототип (сейчас)
 
-- Define the core promise: one command surface for local tools, web services, APIs, media, files, and agents.
-- Define the first narrow MVP workflow.
-- Define what terio is not: not a full OS, not a full browser replacement, not a universal Photoshop replacement.
-- Define the trust model for compiled behavior.
-- Define the first rendered output block types.
+- [x] Сформулировать суть: terio = терминал + рендеринг + кеширование поведения.
+- [x] Зафиксировать scope: не коннекторы, не модальные редакторы, не шэринг.
+- [x] Выбрать стек: Rust, CLI-first.
+- [ ] Написать docs/mvp.md с жёстким scope.
+- [ ] Написать docs/trust-model.md с risk taxonomy и permission policy.
+- [ ] Добавить LICENSE.
+- [ ] Создать Cargo.toml и базовую структуру src/.
+- [ ] CI: базовый линтер и сборка.
 
-## Phase 2: Static Prototype
+## Фаза 1: Shell execution + рендеринг (MVP Core)
 
-- Build mock documents and screenshots for terminal output as web-rendered blocks.
-- Prototype `ls` as a file gallery or table.
-- Prototype `git log` as a commit timeline.
-- Prototype command output as a readable feed.
-- Prototype a modal switch between command mode and rendered reading mode.
-- Test whether users understand the product without abstract terms such as "post-program world".
+- [ ] `terio run <command>` — исполнить shell-команду, показать stdout/stderr.
+- [ ] Захват exit code, duration, working directory.
+- [ ] Повторный запуск последней команды (`terio rerun`).
+- [ ] Рендеринг результата как plain text (fallback).
+- [ ] Один структурный renderer: таблица для `ls -l` / csv / ffmpeg output.
+- [ ] JSONL-лог каждого выполнения (Behavior Log).
 
-## Phase 3: Local MVP
+**Критерий:** `terio run ls -l` показывает файлы как таблицу, а `terio run echo hello` показывает plain text. Лог пишется.
 
-- Implement local shell command execution.
-- Capture stdout, stderr, exit code, working directory, duration, and artifacts.
-- Render a small set of command outputs into structured blocks.
-- Keep normal plain-text fallback for everything else.
-- Add local settings and history storage.
-- Add a simple agent command entry for tasks that need reasoning.
+## Фаза 2: Behavior Log + компилятор рецептов
 
-## Phase 4: Behavior Compiler MVP
+- [ ] Анализ лога: группировка похожих запросов и команд.
+- [ ] Предложение рецепта после N успешных выполнений.
+- [ ] Формат Recipe: YAML (аргументы, шаги, прекондишены, риск).
+- [ ] Валидация аргументов и прекондишенов.
+- [ ] Выполнение рецепта: подстановка аргументов с экранированием.
+- [ ] Повышение/понижение confidence на основе успехов/неудач.
 
-- Record repeated request and command-chain patterns.
-- Implement argument extraction for one safe workflow.
-- Compile the workflow into a parameterized local script or recipe.
-- Add confidence thresholds and failure tracking.
-- Add automatic fallback to the agent when the compiled behavior fails.
-- Display saved token/time estimates for compiled behavior.
+**Критерий:** terio замечает, что пользователь трижды выполнил `ffmpeg -i track.flac ...`, и предлагает рецепт. Рецепт запускается с новыми аргументами.
 
-## Phase 5: Connector Expansion
+## Фаза 3: Trust Engine + безопасность
 
-- Add GitHub connector for issues, pull requests, notifications, and CI status.
-- Add media connector for playlists, local library state, and playback control.
-- Add download/library connector for missing episodes or media files.
-- Add file operations connector with previews and confirmation rules.
-- Add Self OS integration for trust and delegation reuse.
+- [ ] Risk taxonomy (read_only, local_write, destructive, network_*, credential, financial).
+- [ ] Permission policy: always_ask / ask_once / allow_for_dir / allow_for_recipe / never.
+- [ ] Confirmation UI перед опасными рецептами.
+- [ ] Redaction secrets из лога.
+- [ ] Shell quoting и защита от injection.
+- [ ] Expandable trace: пользователь видит, какие команды реально будут выполнены.
 
-## Phase 6: Modal Workspace
+**Критерий:** рецепт с risk `destructive` требует подтверждения. Secrets не пишутся в лог.
 
-- Add file preview and edit mode.
-- Add media mode for audio/video playback controls and metadata.
-- Add table/database mode for structured data inspection.
-- Add long-page reading mode for news, logs, documentation, and summaries.
-- Keep mode switching explicit and reversible.
+## Фаза 4: Agent integration
 
-## Phase 7: Sharing And Remote Sessions
+- [ ] Естественно-языковый ввод (`terio ask "..."`).
+- [ ] LLM-провайдер: конфигурируемый (OpenAI, Anthropic, локальный).
+- [ ] Агент генерирует shell-команды по запросу.
+- [ ] Fallback: если рецепт не найден → агент.
+- [ ] Fallback: если рецепт упал → агент с контекстом ошибки.
+- [ ] Показ экономии: "этот запрос выполнен по рецепту, сэкономлено X токенов".
 
-- Add shareable terminal blocks.
-- Add shared read-only sessions.
-- Add team behavior recipe libraries.
-- Add audit logs for shared actions.
-- Evaluate Mosh-style persistent remote sessions.
+**Критерий:** `terio ask "split this flac/cue and name like last time"` — если рецепт есть, выполняется без LLM; если нет, агент генерирует команды.
 
-## Phase 8: Commercial Product
+## Фаза 5: Расширение рендеринга
 
-- Package a local desktop build.
-- Add paid connector packs or cloud sync.
-- Add team plans with shared workflows and permissions.
-- Add enterprise controls for audit, policy, and credential isolation.
-- Publish measured savings: avoided LLM calls, repeated commands eliminated, time saved, and attention saved.
+- [ ] Timeline renderer (git log).
+- [ ] Card renderer (статусы, предупреждения).
+- [ ] Gallery renderer (файлы, превью).
+- [ ] Progress renderer (длинные операции с шагами).
+- [ ] Readable page renderer (новости, логи, документация).
+- [ ] Авто-выбор renderer на основе типа вывода.
+
+**Критерий:** `git log` показывается как commit timeline. `curl` новости — как читаемая страница.
+
+## Фаза 6: Working environment
+
+- [ ] `terio init` — настройка workspace (CWD, алиасы, провайдеры).
+- [ ] `terio config` — управление политиками доверия.
+- [ ] `terio recipe list` / `terio recipe edit`.
+- [ ] `terio log` — просмотр истории.
+- [ ] `terio stats` — экономия токенов и времени.
+
+**Критерий:** пользователь может настроить terio под себя, не выходя из CLI.
+
+## Фаза 7: Connectors (extended)
+
+- [ ] GitHub: отображать issues/PR как рендеренные блоки.
+- [ ] Media: управление плейлистами через shell + render.
+- [ ] Download: поиск и загрузка отсутствующих файлов.
+- [ ] Session export: поделиться блоком или историей.
+
+> **Важно:** коннекторы не встраиваются в terio, а реализуются через shell-команды + рендеринг. terio не становится «медиаплеером» — он показывает результат работы медиа-команд.
+
+## Фаза 8: Desktop / Commercial
+
+- [ ] Упаковка: десктопный билд (Rust + webview).
+- [ ] Freemium: лимит рецептов / agent-минут.
+- [ ] Paid: история, расширенные политики, несколько профилей.
+- [ ] Cost-savings dashboard.
+- [ ] Marketplace рецептов (community).

@@ -1,0 +1,19 @@
+{
+  "type": "table",
+  "title": "Track Split Results",
+  "status": "success",
+  "headers": ["#", "Title", "Duration", "File"],
+  "rows": [
+    ["01", "Intro", "3:45", "01 - Intro.flac"],
+    ["02", "Main Theme", "4:12", "02 - Main Theme.flac"],
+    ["03", "Interlude", "2:30", "03 - Interlude.flac"],
+    ["04", "Climax", "5:01", "04 - Climax.flac"],
+    ["05", "Outro", "3:18", "05 - Outro.flac"]
+  ],
+  "summary": "5 tracks extracted successfully in 12.3s",
+  "actions": [
+    {"label": "Open folder", "command": "xdg-open /home/user/music/tracks"},
+    {"label": "Play album", "command": "mpv /home/user/music/tracks"}
+  ],
+  "rawOutput": "stdout lines from ffmpeg and file listing..."
+}

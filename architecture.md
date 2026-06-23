@@ -1,65 +1,160 @@
 # Architecture
 
-## Overview
+## Core Idea
 
-terio is a standalone interface layer that combines shell execution, web-rendered output, agent control, behavior compilation, modal workspaces, and connectors to external functions.
+terio — это три слоя, которые вместе дают пользователю единое место управления:
 
-The first architecture should stay local-first. The terminal runs commands in the user's environment, records workflows, renders selected outputs as structured views, and only calls an LLM when reasoning is actually needed.
+```
+┌─────────────────────────────────────────────────┐
+│              COMMAND SURFACE                     │
+│    (shell commands / natural language / hotkeys) │
+├─────────────────────────────────────────────────┤
+│              EXECUTION LAYER                     │
+│      (локальный shell, process lifecycle)        │
+├─────────────────────────────────────────────────┤
+│           WEB RENDERER / OUTPUT LAYER            │
+│   (рендеринг stdout/result в структурированные   │
+│    блоки: таблицы, карточки, таймлайны и т.д.)   │
+├─────────────────────────────────────────────────┤
+│           BEHAVIOR COMPILER & LOG                │
+│   (запись, распознавание, компиляция рецептов,   │
+│    trust engine, fallback)                       │
+├─────────────────────────────────────────────────┤
+│                STORAGE LAYER                     │
+│   (preferences, log, рецепты, trust scores)      │
+└─────────────────────────────────────────────────┘
+```
 
-## Components
+Всё остальное (Git, GitHub, медиа, базы данных, новости) — это **shell-команды**, которые пользователь вводит в Command Surface, а terio исполняет и рендерит. terio не строит для них отдельные коннекторы на этапе MVP — их заменяет агент (LLM), который генерирует нужную команду.
 
-- Command Surface: accepts shell commands, natural-language requests, hotkeys, and modal actions.
-- Execution Layer: runs local shell commands and connector actions with explicit process state, exit codes, logs, and permissions.
-- Web Renderer: converts command results into readable HTML-like blocks such as tables, cards, galleries, timelines, previews, and progress views.
-- Agent Layer: plans unknown tasks, extracts arguments, chooses tools, explains risky actions, and falls back when compiled behavior cannot run.
-- Behavior Log: stores user request, resolved arguments, command chain, result summary, exit status, duration, and error signals.
-- Behavior Compiler: detects repeated successful patterns and turns them into parameterized scripts or recipes.
-- Trust Engine: decides when a compiled behavior can run automatically based on confidence, prior success, failure history, and action risk.
-- Modal Workspace: switches between command mode, rendered reading mode, file edit mode, media mode, database/table mode, and shared-session mode.
-- Connector Layer: integrates with local filesystem, Git, media tools, download managers, APIs, calendars, mail, GitHub, and future Self OS plugins.
-- Session Sharing Layer: exposes selected terminal blocks, sessions, or behavior recipes to other users without sharing the whole machine.
-- Storage Layer: stores preferences, history, compiled scripts, trust scores, connector credentials, and rendering metadata.
-- Safety And Permissions Layer: isolates credentials, validates script arguments, blocks destructive auto-actions, and shows confirmations for risky operations.
+## Компоненты
 
-## Data Flow
+### 1. Command Surface
+- Принимает: shell-команды (строки), естественно-языковые запросы (для агента), горячие клавиши.
+- Классифицирует ввод: прямая shell-команда → Execution Layer; запрос → Agent Layer; известный рецепт → Behavior Compiler.
+- **Инвариант:** каждый ввод получает классификацию до исполнения.
 
-1. The user enters a command or natural-language request.
-2. The command surface classifies it as direct shell, known compiled behavior, connector action, or agent task.
-3. If a trusted compiled behavior matches, the Trust Engine validates confidence and arguments.
-4. Trusted behavior executes directly through the Execution Layer.
-5. Unknown, low-confidence, or failed behavior falls back to the Agent Layer.
-6. The Execution Layer returns output, exit code, logs, artifacts, and metadata.
-7. The Web Renderer chooses an appropriate display block.
-8. The Behavior Log stores the request, actions, arguments, result, and errors.
-9. The Behavior Compiler periodically detects repeated successful patterns.
-10. When a pattern is stable, terio offers or silently prepares a reusable behavior depending on risk level.
+### 2. Execution Layer
+- Запускает shell-процессы в CWD пользователя.
+- Захватывает: stdout, stderr, exit code, duration, working directory.
+- Предусловие: команда не исполняется, если не прошла validation (для рецептов) или confirmation (по risk level).
+- Постусловие: результат + метаданные передаются в Renderer и Log.
+- **Модель процесса:** `spawn -> stream -> collect -> return`. stdout/stderr стримятся в реальном времени.
+- **Отмена:** если процесс не отменяем стандартными сигналами, terio создаёт «отменяющее задание» (kill + cleanup).
 
-## Behavior Compiler
+### 3. Web Renderer (Output Layer)
+- Получает на вход: `ExecutionResult { stdout, stderr, exit_code, duration, artifacts }`.
+- Выбирает тип блока: `table`, `card`, `timeline`, `gallery`, `progress`, `log`, `plain_text`.
+- Возвращает структурированный блок.
+- Формат блока:
+  ```json
+  {
+    "type": "table",
+    "title": "Track Split Results",
+    "status": "success",
+    "data": { ... },
+    "actions": ["open_folder", "play_album"],
+    "raw_output": "stdout here"
+  }
+  ```
+- **Правило:** plain text остаётся валидным, когда он лучше структуры.
 
-The Behavior Compiler caches behavior, not answers. It should not store a brittle LLM response and replay it blindly. It should extract a stable workflow with parameters.
+### 4. Agent Layer
+- Планирует неизвестные задачи.
+- Извлекает аргументы и выбирает инструменты (shell-команды).
+- Объясняет рискованные действия.
+- Срабатывает только когда рецепт не найден или упал.
+- **Инвариант:** агент не вызывается, если сработал доверенный рецепт.
 
-For example, "split this FLAC/CUE album and rename tracks like last time" becomes a recipe with arguments for the FLAC file, CUE file, output directory, and naming template. If the recipe has enough successful history and the current arguments validate, it runs without another LLM call.
+### 5. Behavior Log
+- Хранит: request, resolved arguments, command chain, result summary, exit status, duration, risk level, error signals.
+- Формат: JSONL (одна запись на выполнение).
+- **Правило:** секреты (токены, ключи) не попадают в лог — редэктятся до записи.
+- Используется Behavior Compiler для обнаружения паттернов.
 
-## Trust Rule
+### 6. Behavior Compiler
+- **Pipeline:** Capture → Normalize → Cluster → Propose → Validate → Execute → Observe → Score → Fallback.
+- **Вход:** Behavior Log (история успешных выполнений).
+- **Выход:** Recipe (YAML).
+- Кеширует **поведение**, а не ответы LLM.
+- Не предлагает рецепт, пока нет N успешных выполнений (N настраивается, default: 3).
 
-Automatic execution requires confidence, successful history, safe action type, valid arguments, and observable rollback or fallback behavior. Destructive, financial, publishing, credential, and external-send actions should require confirmation unless the user explicitly changes the policy.
+### 7. Trust Engine
+- Решает: можно ли выполнить рецепт автоматически?
+- Вход: confidence score, история успехов/неудач, risk level, valid arguments.
+- Политики: `always_ask` / `ask_once` / `allow_in_dir` / `allow_for_recipe` / `never_allow`.
+- **Постусловие:** решение логируется и показывается пользователю (expandable trace).
 
-## Rendering Rule
+## Risk Taxonomy
 
-Output should be rendered in the form that reduces attention cost. Plain text remains valid when plain text is best. Structured views are useful only when they make results easier to inspect, compare, navigate, or act on.
+| Risk Level | Примеры | Default Policy |
+|------------|---------|----------------|
+| `read_only` | `ls`, `cat`, `git status` | Auto |
+| `local_write` | `mkdir`, `cp`, `ffmpeg -i` | Confirm per recipe |
+| `destructive` | `rm -rf`, `mv --overwrite` | Always confirm |
+| `network_read` | `curl`, `wget`, `git fetch` | Auto (recipe: confirm) |
+| `network_write` | `git push`, `POST` | Always confirm |
+| `credential_access` | токены, ключи, .env | Always confirm, не логировать |
+| `financial` | покупки, платежи | Always confirm |
 
-## Integration Boundary
+## Recipe Format (MVP)
 
-terio should start with engines that already expose usable control surfaces:
+```yaml
+id: split_flac_cue_v1
+name: Split FLAC/CUE album
+risk: local_write
+arguments:
+  flac_file:
+    type: file
+    required: true
+    pattern: "*.flac"
+  cue_file:
+    type: file
+    required: true
+    pattern: "*.cue"
+  output_dir:
+    type: directory
+    default: "./tracks"
+  naming_template:
+    type: string
+    default: "{track:02d} - {title}"
+preconditions:
+  - command_exists: ffmpeg
+  - file_exists: "${flac_file}"
+  - file_exists: "${cue_file}"
+steps:
+  - run: "mkdir -p ${output_dir}"
+  - run: "ffmpeg -i ${flac_file} -f segment -segment_times ... ${output_dir}/... "
+postconditions:
+  - files_created_in: "${output_dir}"
+  - min_files: 1
+render:
+  type: track_table
+fallback: agent_or_manual
+```
 
-- command-line tools such as git, ffmpeg, curl, rsync, and package managers;
-- local files and open data formats;
-- APIs such as GitHub, media managers, calendars, mail, and download services;
-- Self OS delegation and trust components;
-- browser-readable content such as news feeds, search results, logs, and dashboards.
+> **Безопасность:** аргументы экранируются (shell quoting) перед подстановкой. Рецепт не может содержать произвольный shell injection — только параметризованные шаги.
 
-GUI-heavy products whose functionality is inseparable from their interface are not first-phase targets. terio should not pretend to replace every application immediately.
+## Data Flow (MVP)
+
+1. Пользователь вводит `split this flac/cue`.
+2. Command Surface классифицирует: похоже на известный рецепт.
+3. Trust Engine проверяет confidence, аргументы, риск.
+4. Если доверие > порога → рецепт исполняется через Execution Layer.
+5. Результат уходит в Renderer → пользователь видит таблицу.
+6. Результат уходит в Log.
+7. Если рецепт неизвестен или упал → Agent Layer планирует команды.
+8. После N успешных выполнений Behavior Compiler предлагает рецепт.
+
+## Stack (MVP)
+
+- **Язык:** Rust (CLI-first).
+- **Shell execution:** `std::process::Command` / `duct` crate.
+- **Renderer:** HTML-шаблоны → открываются в браузере или встроенном webview.
+- **Log:** JSONL-файл.
+- **Recipe:** YAML (serde + yaml-rust).
+- **Agent:** API к LLM (провайдер настраивается).
 
 ## Key Design Rule
 
-The user should feel like a commander, not an operator of many unrelated programs. The interface should ask for outcomes, show what happened clearly, and turn repeated successful behavior into cheaper execution.
+Пользователь — командир, а не оператор множества несвязанных программ. Интерфейс спрашивает результат, показывает что произошло, и превращает повторяющийся успех в дешёвое исполнение.

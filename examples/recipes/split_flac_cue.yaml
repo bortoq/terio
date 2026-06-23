@@ -1,0 +1,47 @@
+id: split_flac_cue_v1
+name: Split FLAC/CUE album
+description: Разделить образ альбома (FLAC+CUE) на отдельные треки и переименовать
+risk: local_write
+arguments:
+  flac_file:
+    type: file
+    required: true
+    pattern: "*.flac"
+    description: FLAC image file (e.g. album.flac)
+  cue_file:
+    type: file
+    required: true
+    pattern: "*.cue"
+    description: CUE sheet file (e.g. album.cue)
+  output_dir:
+    type: directory
+    required: false
+    default: "./tracks"
+    description: Output directory for split tracks
+  naming_template:
+    type: string
+    required: false
+    default: "{track:02d} - {title}"
+    description: Naming pattern (Python format syntax)
+preconditions:
+  - command_exists: ffmpeg
+  - file_exists: "${flac_file}"
+  - file_exists: "${cue_file}"
+  - not_empty: "${output_dir}"
+steps:
+  - id: create_output_dir
+    run: "mkdir -p ${output_dir}"
+    description: Create output directory
+  - id: split_tracks
+    run: "ffmpeg -i ${flac_file} -i ${cue_file} -map 0:0 -c copy -f segment -segment_times \"$(awk -F' ' '/INDEX 01/ {print $2}' ${cue_file} | tr ':' ' ' | awk '{print $1*60+$2}' | paste -sd,)\" ${output_dir}/track_%02d.flac"
+    description: Split FLAC by CUE timings
+    timeout_secs: 300
+postconditions:
+  - files_created_in: "${output_dir}"
+  - min_files: 1
+  - file_count_gt: 1
+render:
+  type: track_table
+  options:
+    columns: ["track", "title", "duration", "file"]
+fallback: manual
