@@ -1,19 +1,26 @@
 {
+  "schema_version": 1,
+  "block_id": "01JAN3XAMPLE001",
+  "run_id": "01JAN3XAMPLE001",
   "type": "table",
   "title": "Track Split Results",
   "status": "success",
-  "headers": ["#", "Title", "Duration", "File"],
+  "columns": [
+    {"key": "track", "label": "#"},
+    {"key": "title", "label": "Title"},
+    {"key": "duration", "label": "Duration"},
+    {"key": "file", "label": "File"}
+  ],
   "rows": [
-    ["01", "Intro", "3:45", "01 - Intro.flac"],
-    ["02", "Main Theme", "4:12", "02 - Main Theme.flac"],
-    ["03", "Interlude", "2:30", "03 - Interlude.flac"],
-    ["04", "Climax", "5:01", "04 - Climax.flac"],
-    ["05", "Outro", "3:18", "05 - Outro.flac"]
+    {"track": "01", "title": "Intro", "duration": "3:45", "file": "01 - Intro.flac"},
+    {"track": "02", "title": "Main Theme", "duration": "4:12", "file": "02 - Main Theme.flac"},
+    {"track": "03", "title": "Interlude", "duration": "2:30", "file": "03 - Interlude.flac"},
+    {"track": "04", "title": "Climax", "duration": "5:01", "file": "04 - Climax.flac"},
+    {"track": "05", "title": "Outro", "duration": "3:18", "file": "05 - Outro.flac"}
   ],
   "summary": "5 tracks extracted successfully in 12.3s",
   "actions": [
-    {"label": "Open folder", "command": "xdg-open /home/user/music/tracks"},
-    {"label": "Play album", "command": "mpv /home/user/music/tracks"}
-  ],
-  "rawOutput": "stdout lines from ffmpeg and file listing..."
+    {"label": "Open folder", "kind": "command", "risk": "local_write", "command": "xdg-open /home/user/music/tracks"},
+    {"label": "Play album", "kind": "command", "risk": "read_only", "command": "mpv /home/user/music/tracks"}
+  ]
 }

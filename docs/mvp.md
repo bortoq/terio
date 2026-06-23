@@ -3,105 +3,117 @@
 ## Цель
 
 Доказать, что terio может:
-1. Исполнить shell-команду.
-2. Отрендерить результат как структурированный веб-блок.
-3. Распознать повторяемый workflow и превратить его в доверенный локальный рецепт.
+1. Исполнить shell-команду и отрендерить результат.
+2. Принять задачу на естественном языке, построить команды через AI-модель и выполнить их.
+3. Распознать повторяемый workflow и превратить его в рецепт.
+4. Откатить изменения (undo).
 
 ## ICP (Ideal Customer Profile)
 
-**Power user командной строки.** Разработчик, DevOps, data/media hoarder, который:
-- уже работает в терминале ежедневно;
-- повторяет одни и те же ручные последовательности команд;
-- использует или пробовал AI-агенты для кода/терминала;
+**Пользователь командной строки**, который:
+- ежедневно работает в терминале;
+- повторяет одни и те же ручные последовательности;
+- использует AI-агенты (OpenCode, Codex) или хотел бы попробовать;
 - готов попробовать новый инструмент, если он сокращает переключения.
+
+Выбор первого демо-воркфлоу определяется простотой подключения. Сейчас выбран FLAC/CUE, но Git, `gh`, `rsync`, `mpv` — такие же кандидаты. В MVP не фиксируется жёсткий список интеграций — фиксируется механика.
 
 ## Что входит в MVP
 
 ### 1. Shell execution
-- `terio run <command>` — запуск произвольной shell-команды в CWD.
-- Захват stdout, stderr, exit code, duration.
-- Stream вывода в реальном времени.
+- `terio run -- <command>` — запуск произвольной shell-команды в CWD.
+- Захват stdout, stderr, exit code, duration, argv.
 - `terio rerun` — повтор последней команды.
+- Stream вывода в реальном времени.
 
-### 2. Рендеринг вывода
-- Plain text renderer (fallback для всего).
-- Table renderer для: `ls -l`, csv-подобного вывода, ffmpeg progress.
-- Card renderer для статуса и предупреждений.
+### 2. Agent (Built-in AI)
+- `terio ask "..."` — естественно-языковой запрос.
+- Агент генерирует shell-команды.
+- Показывает трейс команд перед выполнением.
+- Исполняет, рендерит результат.
+- Провайдер: конфигурируемый (OpenAI, Anthropic, локальный).
 
-### 3. Behavior Log
-- JSONL-файл в `~/.terio/log/`.
-- Каждая запись: timestamp, request, command, args, stdout summary, exit code, duration, risk level, error.
-- **Секреты не пишутся** — редэкция до записи.
+### 3. Рендеринг вывода
+- Plain text renderer (fallback).
+- Table renderer для табличного вывода.
+- Card renderer для статусов.
+- Timeline renderer для git log.
 
-### 4. Один рецепт (FLAC/CUE split)
-- Формат: YAML.
-- Аргументы: flac_file, cue_file, output_dir, naming_template.
-- Прекондишены: проверка наличия ffmpeg, существования файлов.
-- Шаги: 2–3 shell-команды с подстановкой аргументов.
-- Посткондишены: проверка, что файлы созданы.
-- Risk: `local_write`.
+### 4. Behavior Log
+- JSONL-файл (v1) в `~/.terio/log/`.
+- Каждая запись: schema_version, run_id, session_id, ts, kind, request, command, cwd, risk, exit, duration.
+- Хранение raw output: `~/.terio/runs/<run_id>/stdout.log`.
+- **Секреты редэктятся** из всех полей.
 
-### 5. Trust Engine (MVP)
-- Порог confidence: 3 успешных выполнения перед предложением рецепта.
-- Ручное подтверждение перед первым реплеем.
-- После 5 успешных реплеев — auto-confirm для `local_write`.
-- Expandable trace: пользователь видит команды рецепта.
+### 5. Behavior Compiler
+- Анализ лога на повторяющиеся паттерны.
+- Предложение рецепта после 3+ успешных выполнений.
+- Recipe v1: YAML, structured argv, preconditions, postconditions.
+- Валидация аргументов перед выполнением.
 
-### 6. Fallback
-- Если рецепт не найден → сообщение "Recipe not found".
-- Если рецепт упал → показать ошибку, exit code, упавший шаг.
-- В MVP fallback к агенту НЕ входит (агент — Фаза 4).
+### 6. Trust Engine (MVP)
+- Risk taxonomy.
+- Confidence score: +0.2 за успех, -0.3 за неудачу.
+- Порог предложения рецепта: 3 успеха.
+- Порог авто-запуска: 0.8 (local_write), 0.95 (network_read).
+- Expandable trace.
+
+### 7. Undo/Redo
+- Все изменения файлов (создание, запись, удаление) логируются.
+- `rm` заменяется на trash (перемещение в `~/.terio/trash/`).
+- `terio undo` — откат последнего изменения.
+- `terio redo` — повтор отменённого.
+
+### 8. Git / GitHub (как пример интеграции)
+- `terio run -- git status` → таблица.
+- `terio run -- gh issue list` → карточки.
+- Не в виде коннекторов, а как shell-рендеринг.
+
+### 9. Recipes
+- `terio recipe list`.
+- `terio recipe run <id> -- arg=value`.
+- `terio recipe validate <file>`.
 
 ## Что НЕ входит в MVP
 
-- ❌ GitHub connector.
-- ❌ Media controller / плейлисты.
-- ❌ Missing episode downloader.
-- ❌ Modal workspace / редактор.
-- ❌ Shared sessions.
-- ❌ Marketplace.
+- ❌ Desktop-сборка (CLI only).
+- ❌ Продвинутый редактор рецептов (редактирование через `$EDITOR` ок).
+- ❌ Реестр рецептов / маркетплейс.
+- ❌ Шэринг сессий.
 - ❌ Team features.
 - ❌ Cloud sync.
-- ❌ Agent / LLM integration.
-- ❌ Mobile / web remote.
-- ❌ GUI / desktop app (CLI only).
+- ❌ Плагины / WebAssembly.
+- ❌ Мобильный интерфейс.
 
-## Формат Behavior Log (MV0)
-
-```jsonl
-{"ts":"2026-06-23T10:00:00Z","request":"ls -l","command":"ls -l","exit":0,"duration_ms":12,"risk":"read_only","stdout_summary":"12 entries, 3 dirs","cwd":"/home/user"}
-{"ts":"2026-06-23T10:01:00Z","request":"split flac/cue","command":"ffmpeg -i album.flac ...","exit":0,"duration_ms":4500,"risk":"local_write","stdout_summary":"12 tracks extracted","cwd":"/home/user/music","recipe_id":"split_flac_cue_v1"}
-```
-
-## Формат Rendered Block (MVP)
-
-```json
-{
-  "type": "table",
-  "title": "Track Split Results",
-  "status": "success",
-  "headers": ["#", "Title", "Duration", "File"],
-  "rows": [
-    ["01", "Intro", "3:45", "01 - Intro.flac"],
-    ["02", "Main", "4:12", "02 - Main.flac"]
-  ],
-  "actions": [
-    {"label": "Open folder", "command": "xdg-open /home/user/music/tracks"},
-    {"label": "Play album", "command": "mpv /home/user/music/tracks"}
-  ],
-  "rawOutput": "stdout lines..."
-}
-```
+Всё остальное (интеграция конкретных программ) **не исключается** — выбирается по принципу «что проще подключить».
 
 ## Критерии успеха MVP
 
-1. `terio run ls -l` показывает красиво отформатированную таблицу файлов.
-2. `terio log` показывает историю.
-3. После трёх выполнений сплита FLAC/CUE terio предлагает сохранить рецепт.
-4. Рецепт запускается с новыми файлами и даёт корректный результат.
-5. Рецепт с невалидными аргументами не запускается (validation failure).
-6. Рецепт с risk `local_write` требует подтверждения при первом запуске.
-7. Все секреты редэктятся из лога.
+1. `terio run -- ls -l` показывает таблицу.
+2. `terio ask "list files"` генерирует `ls`, показывает таблицу.
+3. `terio log` показывает историю.
+4. После 3+ FLAC/CUE сплитов terio предлагает рецепт.
+5. Рецепт с новыми аргументами даёт корректный результат.
+6. `terio undo` откатывает созданные файлы.
+7. Secrets не попадают в лог.
+8. `terio run -- git status` показывает статус как таблицу.
+
+## CLI контракт (MVP)
+
+```bash
+terio run -- <command...>    # shell-команда
+terio ask "<request>"        # естественный язык
+terio rerun                  # повтор последней
+terio undo                   # откат
+terio redo                   # повтор отменённого
+terio log                    # история
+terio log --json             # история в JSON
+terio recipe list            # список рецептов
+terio recipe run <id> -- arg=value  # запуск рецепта
+terio recipe validate <file> # валидация рецепта
+terio trace <run_id>         # трейс выполнения
+terio config                 # настройки
+```
 
 ## Структура репозитория (MVP)
 
@@ -114,6 +126,7 @@ terio/
     main.rs
     cli.rs
     exec.rs
+    agent.rs
     render/
       mod.rs
       table.rs
@@ -126,14 +139,15 @@ terio/
       validate.rs
       compile.rs
     trust.rs
+    undo.rs
     config.rs
   docs/
     mvp.md
     architecture.md
     trust-model.md
     behavior-log.md
-  recipes/
-    split_flac_cue.yaml
-  terio_log/
-    (пример лога)
+  examples/
+    recipes/
+    logs/
+    blocks/
 ```
