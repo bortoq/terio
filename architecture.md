@@ -1,204 +1,158 @@
 # Architecture
 
-## Core Metaphor
+## Core Idea
 
-terio — это **панель управления** (control panel). Как пульт для телевизора, stereo-системы и приставки: он не заменяет эти устройства, но даёт единую точку контроля над ними.
+terio — это агентный терминал с ленивым кешированием поведения.
 
-terio контролирует программы, которые имеют отсоединяемый интерфейс:
-- CLI-инструменты (git, ffmpeg, curl, rsync, mpv, npm, docker);
-- программы с API (GitHub, медиасерверы, download-индексаторы);
-- сервисы, доступные через shell (файловая система, базы данных, браузер через `open`/`xdg-open`).
+Упрощённо:
 
-terio **не становится** этими программами — он даёт интерфейс для управления ими.
+```
+Пользователь → [Запрос] → Поиск в кеше скриптов → Найден? → Выполнить скрипт
+                                                      ↓
+                                                   Не найден?
+                                                      ↓
+                                              AI-модель строит план
+                                                      ↓
+                                              Показать план → Подтверждение
+                                                      ↓
+                                              Выполнить команды → Показать результат
+                                                      ↓
+                                              Сохранить цепочку как скрипт
+```
 
 ## Компоненты
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                 COMMAND SURFACE                       │
-│   (терминальный ввод / естественный язык / горячие    │
-│    клавиши / голос)                                   │
-├──────────────────────────────────────────────────────┤
-│                    CORE LAYER                         │
-│                                                      │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  │
-│  │  Execution   │  │    Agent     │  │  Behavior   │  │
-│  │    Layer     │  │    Layer     │  │  Compiler   │  │
-│  │  (shell)     │  │  (LLM/planner)│  │  (recipes)  │  │
-│  └─────────────┘  └──────────────┘  └─────────────┘  │
-│                                                      │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  │
-│  │   Web       │  │  Behavior    │  │    Trust     │  │
-│  │  Renderer   │  │     Log      │  │    Engine    │  │
-│  └─────────────┘  └──────────────┘  └─────────────┘  │
-│                                                      │
-├──────────────────────────────────────────────────────┤
-│                   STORAGE LAYER                       │
-│   (preferences, log, recipes, trust scores, undo      │
-│    snapshots, trash)                                  │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│              COMMAND SURFACE                  │
+│   terio ask "..." / terio run -- <command>    │
+├──────────────────────────────────────────────┤
+│              REQUEST MATCHER                  │
+│   Сопоставляет запрос с кешем скриптов       │
+│   (нормализация, fuzzy match, exact match)   │
+├──────────┬───────────────────┬───────────────┤
+│  AGENT   │  EXECUTION LAYER  │  RENDERER     │
+│  (LLM)   │  (shell, process) │  (web blocks) │
+├──────────┴───────────────────┴───────────────┤
+│           SCRIPT CACHE (поведения)            │
+│   request_hash → { script, risk, metadata }  │
+├──────────────────────────────────────────────┤
+│           BEHAVIOR LOG (JSONL)                │
+│   schema_version, run_id, kind, request, ...  │
+├──────────────────────────────────────────────┤
+│           STORAGE LAYER                       │
+│   preferences, credentials (encrypted),       │
+│   scripts, log, trash (experimental undo)     │
+└──────────────────────────────────────────────┘
 ```
 
 ### 1. Command Surface
-- Принимает: shell-команды (`terio run -- ls -l`), естественно-языковые запросы (`terio ask "split this flac"`), горячие клавиши.
-- Классифицирует ввод: shell → Execution Layer; запрос → Agent Layer; известный рецепт → Behavior Compiler.
-- **Инвариант:** каждый ввод классифицируется до исполнения.
+- Принимает: естественно-языковые запросы (`terio ask "..."`) и shell-команды (`terio run -- <command>`).
+- **Инвариант:** каждый запрос проходит через Request Matcher.
 
-### 2. Execution Layer
-- Запускает shell-процессы в CWD пользователя.
-- Модель: `spawn → stream → collect → return`.
-- stdouterr стримятся в реальном времени.
-- Захватывает: stdout, stderr, exit code, duration, argv.
-- **Отмена:** SIGTERM → SIGKILL по таймауту; для сложных случаев — отменяющее задание (process group kill + cleanup).
-- **Предусловие:** команда не исполняется, если не прошла validation (recipe) или confirmation (risk level).
-- **Постусловие:** результат + метаданные → Renderer + Log.
+### 2. Request Matcher
+- Нормализует запрос (lowercase, стоп-слова, токенизация).
+- Ищет совпадение в Script Cache: exact match → fuzzy match → ничего.
+- Если совпадение найдено и script validated → исполняет скрипт без модели.
+- **Ключевое:** это единственное место, где terio решает, вызывать модель или нет.
 
-### 3. Agent Layer (Built-in AI Model)
-- Встроенная AI-модель (конфигурируемый LLM-провайдер: OpenAI, Anthropic, локальный).
-- Получает запрос на естественном языке, планирует последовательность shell-команд.
-- Извлекает аргументы из контекста (текущая директория, файлы, история).
-- Объясняет рискованные действия перед исполнением.
-- **Инвариант:** агент не вызывается, если сработал доверенный рецепт (экономия LLM).
-- **Инвариант:** если рецепт упал, агент подхватывает с контекстом ошибки (fallback).
+### 3. Agent Layer (Built-in AI)
+- Вызывается только когда Request Matcher не нашёл скрипт.
+- Получает: запрос пользователя, CWD, доступные файлы, контекст.
+- Возвращает: план выполнения (chain of shell-команд с обоснованием).
+- Провайдер: конфигурируемый — локальный (llama.cpp, ollama) или удалённый (OpenAI, Anthropic).
+- **Правило:** агент только предлагает план. Пользователь подтверждает. terio исполняет.
+- **Правило:** агент не имеет доступа к credentials (редэкция до отправки в модель).
 
-### 4. Behavior Compiler
-- **Pipeline:** Capture → Normalize → Cluster → Propose → Validate → Execute → Observe → Score → Fallback.
-- **Вход:** Behavior Log — успешные повторяющиеся последовательности.
-- **Выход:** Recipe (YAML) с аргументами, шагами, прекондишенами, риск-уровнем.
-- Кеширует **поведение**, а не ответы LLM.
-- Не предлагает рецепт, пока нет N успешных выполнений (default: 3, настраивается).
+### 4. Execution Layer
+- Принимает: argv-строку или structured command.
+- Запускает процесс, стримит stdout/stderr.
+- Возвращает: exit code, stdout, stderr, duration.
+- **Отмена:** по Ctrl+C, таймауту или `terio cancel`.
+- **Безопасность:** перед выполнением проверяется risk level. Destructive/network_write → обязательное подтверждение.
 
-### 5. Web Renderer
-- Получает: `ExecutionResult { stdout, stderr, exit_code, duration, risk, command }`.
-- Выбирает renderer по типу вывода: `table`, `timeline`, `card`, `gallery`, `progress`, `log`, `readable_page`, `plain_text`.
-- Формат блока:
-  ```json
-  {
-    "schema_version": 1,
-    "block_id": "01J...",
-    "run_id": "01J...",
-    "type": "table",
-    "title": "Track Split Results",
-    "status": "success",
-    "columns": [{"key":"track","label":"#"}],
-    "rows": [{"track":"01","title":"Intro","duration":"3:45","file":"01 - Intro.flac"}],
-    "actions": [
-      {"label":"Open folder","kind":"command","risk":"local_write","command":"xdg-open /home/user/tracks"}
-    ]
-  }
-  ```
-- **Правило:** plain text остаётся валидным, когда он лучше структуры.
+### 5. Renderer
+- Принимает: `ExecutionResult { stdout, stderr, exit_code, duration, command }`.
+- Определяет тип вывода: таблица, карточка, таймлайн, plain text.
+- Показывает результат пользователю.
 
-### 6. Behavior Log
-- Формат: JSONL (v1 — одна запись на команду или рецепт-шаг).
-- Поля: `schema_version`, `run_id`, `session_id`, `ts`, `kind` (command|recipe_step|recipe_run), `request`, `command { display, argv }`, `cwd`, `risk`, `exit`, `duration_ms`, `stdout_summary`, `stderr_summary`, `artifacts` (paths).
-- Хранится в `~/.terio/log/`.
-- **Секреты редэктятся** из ВСЕХ полей перед записью.
-- Ротация: по месяцу или 50MB.
+### 6. Script Cache
+- Хранит: `{ request_hash, normalized_request, script (shell chain), risk, args_template, success_count, created_at, last_used_at }`.
+- Источник: успешные выполнения через Agent Layer.
+- Ключ: нормализованный запрос.
+- **Формат скрипта:** простой shell-скрипт с комментариями, сгенерированный агентом.
+- **Правило:** скрипт не выполняется, если не прошёл валидацию (аргументы существуют, команды доступны).
 
-### 7. Trust Engine
-- Confidence score: `+0.2` за успех, `-0.3` за неудачу (диапазон 0.0–1.0).
-- Порог предложения рецепта: 3 успешных выполнения.
-- Порог авто-запуска: `0.8` для `local_write`, `0.95` для `network_read`.
-- Политики: `always_ask` / `ask_once` / `allow_in_dir` / `allow_for_recipe` / `never_allow`.
-- **Undo safety:** тривиально обратимые действия (создание файлов, запись) могут выполняться без запроса, т.к. terio хранит undo-снапшоты и корзину (trash).
+### 7. Behavior Log
+- JSONL, schema v1.
+- Три вида записей: `agent_turn` (запрос к модели), `command_run` (выполнение команды), `script_run` (выполнение скрипта из кеша).
+- Секреты редэктятся из всех полей.
 
-### 8. Undo/Redo Layer
-- Все изменения (создание, запись, перемещение, удаление) логируются для undo.
-- Удалённые файлы перемещаются в `~/.terio/trash/<run_id>/` вместо `rm`.
-- `terio undo` откатывает последнее изменение.
-- Ограничение по дисковому использованию: `TERIO_TRASH_SIZE_MB=1024`.
+### 8. Trust Engine
+- Risk levels: read_only, local_write, destructive, network_read, network_write, credential_access, financial.
+- Политики: `always_ask`, `ask_once`, `allow`.
+- Для скриптов из кеша: если risk <= local_write и скрипт выполнялся успешно 3+ раза → авто-запуск.
 
-## Risk Taxonomy
+### 9. Undo/Redo (Experimental)
+- **Не гарантируется** для произвольных shell-команд.
+- Best-effort для скриптов из кеша: snapshot затронутых файлов до выполнения.
+- Два режима (выбирается в конфиге):
+  - **Sandbox:** тяжело, но безопасно. Исполнение в изолированном окружении (overlay FS, bubblewrap).
+  - **Warn:** быстро, но рискованно. Только предупреждение перед destructive-действиями.
+- По умолчанию: выключен. Включается пользователем явно.
+
+## Risk Taxonomy (MVP)
 
 | Risk Level | Примеры | Default Policy |
 |------------|---------|----------------|
 | `read_only` | `ls`, `cat`, `git status` | Auto |
-| `local_write` | `mkdir`, `cp`, `ffmpeg` | Auto (undo available) |
-| `destructive` | `rm -rf`, `mv --overwrite` | Confirm, undo via trash |
-| `network_read` | `curl url`, `git fetch` | Auto (recipe: ask_once) |
+| `local_write` | `mkdir`, `cp`, `ffmpeg` | Confirm (agent) / auto (cached script >=3 success) |
+| `destructive` | `rm`, `mv --overwrite` | Always confirm |
+| `network_read` | `curl`, `git fetch` | Confirm (agent) / auto (cached) |
 | `network_write` | `git push`, `curl -X POST` | Always confirm |
-| `credential_access` | токены, ключи, .env | Always confirm, не логировать |
-| `financial` | покупки, API с billing | Always confirm |
+| `credential_access` | токены, ключи | Always confirm, не логировать |
+| `financial` | покупки, API billing | Always confirm |
 
-## Data Flow
+## Data Flow (MVP)
 
-1. Пользователь вводит: `terio ask "split this flac/cue album"`.
-2. Command Surface классифицирует: естественный язык → Agent Layer.
-3. Agent Layer проверяет готовый рецепт (через Behavior Compiler).
-4. Если рецепт найден и confidence > порога → Trust Engine → Execution Layer.
-5. Если рецепта нет или confidence низкий → Agent Layer планирует команды.
-6. Execution Layer выполняет, возвращает результат.
-7. Renderer показывает блок. Log записывает.
-8. Если рецепта не было, но последовательность повторяется 3+ раз → Behavior Compiler предлагает рецепт.
+1. `terio ask "split this flac/cue album"` → Command Surface → Request Matcher.
+2. Matcher ищет в Script Cache. Если найден → шаг 7.
+3. Не найден → Agent Layer (LLM).
+4. Агент возвращает план: `["ffmpeg -i album.flac ...", "mkdir -p tracks"]`.
+5. План показывается пользователю. Подтверждение.
+6. Execution Layer выполняет. Renderer показывает результат. Log пишет.
+7. Цепочка сохраняется в Script Cache как скрипт для этого запроса.
+8. В следующий раз: `terio ask "split this flac/cue album"` → Matcher находит → скрипт выполняется без модели.
 
-## Recipe Format (MVP v1)
+## Формат скрипта в кеше (MVP)
 
-```yaml
-schema_version: 1
-id: split_flac_cue_v1
-name: Split FLAC/CUE album
-risk: local_write
-shell_allowed: false
-arguments:
-  flac_file:
-    type: file
-    required: true
-    extensions: ["flac", "FLAC"]
-  cue_file:
-    type: file
-    required: true
-    extensions: ["cue", "CUE"]
-  output_dir:
-    type: directory
-    required: false
-    default: "./tracks"
-steps:
-  - id: create_output_dir
-    command: mkdir
-    argv: ["-p", "${output_dir}"]
-  - id: split_tracks
-    command: ffmpeg
-    argv:
-      - "-i"
-      - "${flac_file}"
-      - "-i"
-      - "${cue_file}"
-      - "-map"
-      - "0:0"
-      - "-c"
-      - "copy"
-      - "-f"
-      - "segment"
-      - "-segment_times"
-      - "${segment_times}"
-      - "${output_dir}/track_%02d.flac"
-preconditions:
-  - binary_exists: ffmpeg
-  - file_exists: "${flac_file}"
-  - file_exists: "${cue_file}"
-postconditions:
-  - files_created_in: "${output_dir}"
-  - min_files: 1
-on_failure:
-  cleanup_created_files: true
-render:
-  type: track_table
-fallback: agent  # или manual — настраивается
+```json
+{
+  "request_hash": "sha256(normalized_request)",
+  "normalized": "split flac cue album",
+  "risk": "local_write",
+  "success_count": 0,
+  "max_success_count": 3,
+  "script": [
+    {"command": "mkdir", "argv": ["-p", "./tracks"], "risk": "local_write"},
+    {"command": "ffmpeg", "argv": ["-i", "album.flac", "-i", "album.cue", "-map", "0:0", "-c", "copy", "-f", "segment", "./tracks/track_%02d.flac"], "risk": "local_write"}
+  ],
+  "created_at": "2026-06-23T12:00:00Z",
+  "last_used_at": "2026-06-23T12:00:00Z"
+}
 ```
-
-> **Безопасность:** `shell_allowed: false` — шаги используют structured argv, не shell-строки. Аргументы экранируются для shell. Command injection через имена файлов невозможен.
 
 ## Stack
 
 - **Язык:** Rust.
-- **CLI:** clap или bpaf.
-- **Shell execution:** duct или std::process::Command.
-- **Renderer:** HTML-шаблоны (терминальный webview или браузер).
+- **CLI:** clap.
+- **Shell:** duct / std::process::Command.
+- **Renderer:** HTML (webview или браузер).
 - **Log:** serde_json + JSONL.
-- **Recipe:** serde_yaml.
-- **Agent:** HTTP-клиент к LLM API (OpenAI, Anthropic, локальный).
+- **Script Cache:** SQLite или JSON-файл.
+- **Agent:** HTTP client к LLM (openai, anthropic, ollama).
+- **Sandbox (exp):** bubblewrap / nsjail.
 
 ## Key Design Rule
 
-Пользователь — командир за панелью управления. Интерфейс — единый пульт. Программы — исполнительные механизмы. terio не заменяет их, а даёт контроль над ними.
+Пользователь работает. terio запоминает. Модель вызывается только когда нужно впервые.

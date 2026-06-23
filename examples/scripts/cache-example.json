@@ -1,0 +1,33 @@
+{
+  "request_hash": "sha256-abc123def456",
+  "normalized": "split this flac cue album into separate tracks",
+  "risk": "local_write",
+  "success_count": 3,
+  "max_success_count": 3,
+  "trusted": true,
+  "created_at": "2026-06-23T10:00:00Z",
+  "last_used_at": "2026-06-23T14:00:00Z",
+  "script": [
+    {
+      "command": "mkdir",
+      "argv": ["-p", "./tracks"],
+      "risk": "local_write",
+      "description": "Create output directory"
+    },
+    {
+      "command": "ffmpeg",
+      "argv": [
+        "-i", "album.flac",
+        "-i", "album.cue",
+        "-map", "0:0",
+        "-c", "copy",
+        "-f", "segment",
+        "-segment_times", "0 180 360 540",
+        "./tracks/track_%02d.flac"
+      ],
+      "risk": "local_write",
+      "description": "Split FLAC by CUE timings",
+      "timeout_secs": 300
+    }
+  ]
+}

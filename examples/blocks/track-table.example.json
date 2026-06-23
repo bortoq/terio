@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "block_id": "01JAN3XAMPLE001",
-  "run_id": "01JAN3XAMPLE001",
+  "block_id": "BLK001",
+  "run_id": "R005",
   "type": "table",
   "title": "Track Split Results",
   "status": "success",
@@ -18,9 +18,9 @@
     {"track": "04", "title": "Climax", "duration": "5:01", "file": "04 - Climax.flac"},
     {"track": "05", "title": "Outro", "duration": "3:18", "file": "05 - Outro.flac"}
   ],
-  "summary": "5 tracks extracted successfully in 12.3s",
+  "summary": "5 tracks extracted in 12.3s",
   "actions": [
-    {"label": "Open folder", "kind": "command", "risk": "local_write", "command": "xdg-open /home/user/music/tracks"},
+    {"label": "Open folder", "kind": "command", "risk": "read_only", "command": "xdg-open /home/user/music/tracks"},
     {"label": "Play album", "kind": "command", "risk": "read_only", "command": "mpv /home/user/music/tracks"}
   ]
 }

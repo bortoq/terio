@@ -2,63 +2,107 @@
 
 ## Формат
 
-JSONL (JSON Lines) — одна запись на строку, каждая строка — валидный JSON.
+JSONL (JSON Lines) — одна запись на строку.
 
 ## Версия
 
 `schema_version: 1`
 
-## Поля
+## Типы записей (kind)
 
-| Поле | Тип | Обязательное | Описание |
-|------|-----|-------------|----------|
-| `schema_version` | int | да | Версия схемы (1) |
-| `run_id` | string | да | UUID выполнения |
-| `session_id` | string | да | UUID сессии (группа run_id) |
-| `ts` | ISO8601 | да | Время выполнения |
-| `kind` | string | да | `command` / `recipe_step` / `recipe_run` / `agent_turn` |
-| `request` | string | да | Ввод пользователя |
-| `cwd` | string | да | Working directory |
-| `risk` | string | да | Risk level |
-| `exit` | int | да | Exit code (0 = success) |
-| `duration_ms` | int | да | Время выполнения в мс |
-| `command` | object | да | `{ display: "ls -l", argv: ["ls", "-l"] }` |
-| `stdout_summary` | string | нет | Первые 1024 символа stdout |
-| `stderr_summary` | string | нет | Первые 4096 символов stderr |
-| `parent_run_id` | string | нет | Для recipe_step — run_id рецепта |
-| `recipe_id` | string | нет | ID рецепта (если рецепт) |
-| `confidence_before` | float | нет | Confidence рецепта до |
-| `confidence_after` | float | нет | Confidence рецепта после |
-| `error` | string | нет | Описание ошибки |
-| `artifacts` | object | нет | `{ stdout_path, stderr_path, block_path }` |
-| `undo_available` | bool | нет | Можно ли откатить |
+Три вида записей, у каждого свои поля.
 
-## Хранение артефактов
+### 1. `agent_turn` — запрос к AI-модели
 
-```
-~/.terio/
-  log/
-    terio-2026-06.jsonl          # активный лог
-    terio-2026-05.jsonl.gz       # сжатый после ротации
-  runs/
-    <run_id>/
-      stdout.log                 # полный stdout
-      stderr.log                 # полный stderr
-      block.json                 # rendered block (если был)
-  trash/
-    <run_id>/                    # файлы, перемещённые в корзину
+```json
+{
+  "schema_version": 1,
+  "run_id": "uuid",
+  "session_id": "uuid",
+  "ts": "2026-06-23T10:00:00Z",
+  "kind": "agent_turn",
+  "request": "split this flac/cue",
+  "cwd": "/home/user/music",
+  "risk": "local_write",
+  "status": "success|failed|cancelled",
+  "prompt_summary": "files in CWD: album.flac, album.cue",
+  "plan": [
+    {"command": "mkdir", "argv": ["-p", "./tracks"], "risk": "local_write"},
+    {"command": "ffmpeg", "argv": ["-i", "album.flac", ...], "risk": "local_write"}
+  ],
+  "model_provider": "openai",
+  "model_name": "gpt-4o",
+  "duration_ms": 3400,
+  "tokens_used": 450
+}
 ```
 
-## Ротация
+### 2. `command_run` — выполнение shell-команды
 
-- Активный файл: `terio-YYYY-MM.jsonl`.
-- Ротация: по достижении 50MB или первого дня следующего месяца.
-- Старый файл сжимается gzip.
+```json
+{
+  "schema_version": 1,
+  "run_id": "uuid",
+  "session_id": "uuid",
+  "ts": "2026-06-23T10:00:05Z",
+  "kind": "command_run",
+  "request": "split this flac/cue",
+  "parent_run_id": "uuid_agent_turn",
+  "cwd": "/home/user/music",
+  "risk": "local_write",
+  "status": "success|failed",
+  "command": {
+    "display": "mkdir -p ./tracks",
+    "argv": ["mkdir", "-p", "./tracks"]
+  },
+  "exit": 0,
+  "duration_ms": 5,
+  "stdout_summary": null,
+  "stderr_summary": null
+}
+```
 
-## Пример
+### 3. `script_run` — выполнение скрипта из кеша (без модели)
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "uuid",
+  "session_id": "uuid",
+  "ts": "2026-06-23T12:00:00Z",
+  "kind": "script_run",
+  "request": "split this flac/cue",
+  "cwd": "/home/user/music/other_album",
+  "risk": "local_write",
+  "status": "success|failed",
+  "script_id": "sha256_of_normalized_request",
+  "script_success_count": 4,
+  "steps": [
+    {"command": "mkdir", "argv": ["-p", "./tracks"], "exit": 0},
+    {"command": "ffmpeg", "argv": ["-i", "other.flac", ...], "exit": 0}
+  ],
+  "duration_ms": 12500
+}
+```
+
+## Пример лога
 
 ```jsonl
-{"schema_version":1,"run_id":"01J...","session_id":"01J...","ts":"2026-06-23T10:00:00Z","kind":"command","request":"ls -l","cwd":"/home/user","risk":"read_only","exit":0,"duration_ms":8,"command":{"display":"ls -l","argv":["ls","-l"]},"stdout_summary":"14 entries, 3 dirs","artifacts":{"stdout_path":"~/.terio/runs/01J.../stdout.log"}}
-{"schema_version":1,"run_id":"01J...","session_id":"01J...","ts":"2026-06-23T10:05:00Z","kind":"recipe_run","request":"split album.flac","cwd":"/home/user/music","risk":"local_write","exit":0,"duration_ms":12300,"command":{"display":"ffmpeg -i album.flac ...","argv":["ffmpeg","-i","album.flac","..."]},"stdout_summary":"12 tracks extracted","recipe_id":"split_flac_cue_v1","confidence_before":0.6,"confidence_after":0.8,"undo_available":true}
-{"schema_version":1,"run_id":"01J...","session_id":"01J...","ts":"2026-06-23T10:30:00Z","kind":"recipe_step","request":"split live","cwd":"/home/user/music","risk":"local_write","exit":1,"duration_ms":3200,"command":{"display":"ffmpeg -i live.flac ...","argv":["ffmpeg","-i","live.flac","..."]},"stderr_summary":"ffmpeg: No such file: live.cue","error":"CUE file not found","parent_run_id":"01J...","recipe_id":"split_flac_cue_v1","confidence_before":0.8,"confidence_after":0.5}
+{"schema_version":1,"run_id":"R1","session_id":"S1","ts":"2026-06-23T10:00:00Z","kind":"agent_turn","request":"list files","cwd":"/home/user","risk":"read_only","status":"success","plan":[{"command":"ls","argv":["ls","-l"],"risk":"read_only"}],"model_provider":"openai","duration_ms":800,"tokens_used":120}
+{"schema_version":1,"run_id":"R2","session_id":"S1","ts":"2026-06-23T10:00:05Z","kind":"command_run","request":"list files","parent_run_id":"R1","cwd":"/home/user","risk":"read_only","status":"success","command":{"display":"ls -l","argv":["ls","-l"]},"exit":0,"duration_ms":8}
+{"schema_version":1,"run_id":"R3","session_id":"S1","ts":"2026-06-23T12:00:00Z","kind":"script_run","request":"list files","cwd":"/home/user/other","risk":"read_only","status":"success","script_id":"abc123","script_success_count":1,"steps":[{"command":"ls","argv":["ls","-l"],"exit":0}],"duration_ms":6}
 ```
+
+## Хранение
+
+- Директория: `~/.terio/log/`
+- Файл: `terio-YYYY-MM.jsonl`
+- Ротация: по 50MB или по месяцу.
+- Старые: `terio-2026-05.jsonl.gz`
+
+## Правила
+
+1. Secrets редэктятся из всех полей перед записью.
+2. Для `credential_access` — stdout/stderr не пишутся.
+3. prompt_summary — не более 512 символов.
+4. stdout_summary/stderr_summary — не более 1024 символов.
