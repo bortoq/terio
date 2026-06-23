@@ -4,6 +4,8 @@
 
 JSONL. schema_version: 1.
 
+Machine-readable schema: [docs/schemas/behavior-log.schema.json](../docs/schemas/behavior-log.schema.json)
+
 ## Типы записей
 
 ### 1. `agent_turn` — запрос к AI-модели
@@ -27,7 +29,12 @@ JSONL. schema_version: 1.
   "model_provider": "openai",
   "model_name": "gpt-4o",
   "duration_ms": 3400,
-  "tokens_used": 450
+  "tokens_used": 450,
+  "attention_cost": {
+    "user_sec": 8.0,
+    "agent_sec": 3.4,
+    "system_sec": 0.05
+  }
 }
 ```
 
@@ -53,7 +60,12 @@ JSONL. schema_version: 1.
   "exit": 0,
   "duration_ms": 5,
   "stdout_summary": null,
-  "stderr_summary": null
+  "stderr_summary": null,
+  "attention_cost": {
+    "user_sec": 0.0,
+    "agent_sec": 0.0,
+    "system_sec": 0.005
+  }
 }
 ```
 
@@ -81,9 +93,27 @@ JSONL. schema_version: 1.
     {"command": "mkdir", "argv": ["-p", "./tracks"], "exit": 0},
     {"command": "ffmpeg", "argv": ["-i", "other.flac", "..."], "exit": 0}
   ],
-  "duration_ms": 12500
+  "duration_ms": 12500,
+  "attention_cost": {
+    "user_sec": 1.0,
+    "agent_sec": 0.0,
+    "system_sec": 0.01
+  }
 }
 ```
+
+## Стоимость внимания (attention_cost)
+
+Каждая запись содержит раздельные счётчики затрат внимания:
+
+- `user_sec` — секунды внимания пользователя (ввод запроса, чтение вывода, подтверждение).
+- `agent_sec` — секунды внимания агента (LLM — время генерации).
+- `system_sec` — секунды внимания ОС/программ (время выполнения команд, ввод-вывод).
+
+Стоимость внимания используется для:
+- `terio stats` — агрегация по типам ресурсов.
+- Минимизация общей стоимости эксплуатации (см. Экономическая модель в architecture.md).
+- Оценка эффективности кеширования: сколько внимания пользователя и агента сэкономил cache hit.
 
 ## Метрики
 
@@ -98,6 +128,9 @@ JSONL. schema_version: 1.
 | commands_executed | command_run (каждый) |
 | failures | status=failed |
 | total_duration_ms | sum of duration_ms |
+| attention_cost_user_sec | sum of attention_cost.user_sec |
+| attention_cost_agent_sec | sum of attention_cost.agent_sec |
+| attention_cost_system_sec | sum of attention_cost.system_sec |
 
 ## Хранение
 
@@ -113,3 +146,6 @@ JSONL. schema_version: 1.
 3. prompt_summary — не более 512 символов, redacted.
 4. stdout_summary/stderr_summary — не более 1024 символов.
 5. Полный prompt не логируется (только summary).
+6. attention_cost.system_sec вычисляется как duration_ms команд в секундах.
+7. attention_cost.user_sec вычисляется как длительность ввода/чтения (измеряется terio).
+8. attention_cost.agent_sec равен duration_ms вызова модели.

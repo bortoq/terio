@@ -6,6 +6,10 @@
   "normalized_request": "split flac cue album into separate tracks",
   "match_policy": "exact_normalized",
   "risk": "local_write",
+  "scope": {
+    "cwd_policy": "any_cwd_with_parameters",
+    "cwd": "/home/user/music"
+  },
   "parameters": {
     "flac_file": {"source": "glob_one", "pattern": "*.flac", "required": true},
     "cue_file": {"source": "glob_one", "pattern": "*.cue", "required": true},

@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Script Cache Schema (v1)",
+  "description": "Кешированная цепочка команд для повторного выполнения без модели",
+  "type": "object",
+  "required": [
+    "schema_version", "script_id", "request_hash", "version",
+    "normalized_request", "match_policy", "risk",
+    "parameters", "preconditions", "steps",
+    "success_count", "trust_threshold", "created_at", "last_used_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Версия схемы"
+    },
+    "script_id": {
+      "type": "string",
+      "description": "ULID или SHA-256 содержимого (уникальный, меняется при изменении)"
+    },
+    "request_hash": {
+      "type": "string",
+      "description": "SHA-256 нормализованного запроса (для поиска)"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Инкремент при изменении скрипта для того же запроса"
+    },
+    "normalized_request": {
+      "type": "string",
+      "description": "Нормализованный текст запроса"
+    },
+    "match_policy": {
+      "type": "string",
+      "enum": ["exact_normalized"],
+      "description": "Политика сопоставления"
+    },
+    "risk": {
+      "type": "string",
+      "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"],
+      "description": "Общий risk скрипта"
+    },
+    "scope": {
+      "type": "object",
+      "description": "Область применения скрипта",
+      "required": ["cwd_policy"],
+      "properties": {
+        "cwd_policy": {
+          "type": "string",
+          "enum": ["same_cwd_only", "any_cwd_with_parameters"],
+          "description": "Политика применения: только в том же CWD или в любом с параметрами"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "CWD, в котором скрипт был создан"
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "description": "Параметры скрипта",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["source"],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["glob_one", "default"]
+          },
+          "pattern": { "type": "string" },
+          "value": { "type": "string" },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "preconditions": {
+      "type": "array",
+      "description": "Условия перед выполнением",
+      "items": {
+        "type": "object",
+        "anyOf": [
+          { "required": ["binary_exists"] },
+          { "required": ["glob_one"] },
+          { "required": ["file_exists"] }
+        ],
+        "properties": {
+          "binary_exists": { "type": "string" },
+          "glob_one": { "type": "string" },
+          "file_exists": { "type": "string" }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "description": "Команды для выполнения",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["command", "argv", "risk"],
+        "properties": {
+          "command": { "type": "string" },
+          "argv": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "risk": {
+            "type": "string",
+            "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"]
+          },
+          "description": { "type": "string" },
+          "timeout_secs": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "Созданные файлы",
+      "items": {
+        "type": "object",
+        "required": ["path_glob", "kind"],
+        "properties": {
+          "path_glob": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["created_file", "modified_file", "deleted_file"]
+          }
+        }
+      }
+    },
+    "success_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Сколько раз успешно выполнен"
+    },
+    "trust_threshold": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "После скольких успехов auto-run"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Когда создан"
+    },
+    "last_used_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Когда последний раз выполнен"
+    }
+  }
+}

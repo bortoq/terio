@@ -19,6 +19,7 @@ JSON.
 | `normalized_request` | string | Нормализованный текст запроса |
 | `match_policy` | string | `exact_normalized` (MVP) |
 | `risk` | string | Общий risk скрипта |
+| `scope` | object | Область применения скрипта (см. ниже) |
 | `parameters` | object | Параметры: { name: { source, pattern/default, required } } |
 | `preconditions` | array | Условия перед выполнением |
 | `steps` | array | Команды: { command, argv, risk } |
@@ -27,6 +28,19 @@ JSON.
 | `trust_threshold` | int | После скольких успехов auto-run |
 | `created_at` | ISO8601 | Когда создан |
 | `last_used_at` | ISO8601 | Когда последний раз выполнен |
+
+## Scope
+
+```json
+"scope": {
+  "cwd_policy": "same_cwd_only|any_cwd_with_parameters",
+  "cwd": "/home/user/music"
+}
+```
+
+- `cwd_policy: same_cwd_only` — скрипт работает только в том же CWD, в котором был создан. Используется для Option B (фиксированный plan).
+- `cwd_policy: any_cwd_with_parameters` — скрипт параметризован и может выполняться в любом CWD (при условии, что все glob_one дают ровно один файл).
+- `cwd` — CWD, в котором скрипт был создан (для same_cwd_only — обязательный; для any_cwd_with_parameters — информационный).
 
 ## Параметры
 
@@ -47,6 +61,13 @@ JSON.
 - `source: glob_one` — ищет файлы по pattern в CWD. Требуется ровно один файл. Если найдено 0 или >1 — terio спрашивает пользователя.
 - `source: default` — фиксированное значение.
 - `required: true` — выполнение невозможно без этого параметра.
+
+### Валидация путей (path constraints)
+
+Параметры с `source: default` и `value`, содержащим путь, проверяются:
+- `output_dir` не должен выходить за пределы CWD (проверка на `../../`).
+- `path_glob` в artifacts проверяется: результирующий путь должен быть внутри CWD или разрешённой директории.
+- Симлинки разрешаются до проверки границ.
 
 ## Preconditions
 
@@ -82,17 +103,22 @@ JSON.
   "cache_template": {
     "parameters": { ... },
     "preconditions": [ ... ],
+    "steps": [
+      {"command": "ls", "argv": ["ls", "${flags}", "${dir}"], "risk": "read_only"}
+    ],
     "artifacts": [ ... ]
   }
 }
 ```
+
+Шаги для кеша берутся из `cache_template.steps`. Если `cache_template.steps` не передан, terio использует `commands` как шаги (с понижением параметризации — фиксированные argv).
 
 terio валидирует template и показывает пользователю перед сохранением.
 
 ### Option B: Фиксированный plan (запасной)
 
 Если модель не вернула cache_template, terio сохраняет точный structured plan для данного CWD.
-Cache entry работает только при exact match запроса И том же CWD. Параметризация не выполняется.
+Cache entry работает только при exact match запроса И том же CWD (`scope.cwd_policy = "same_cwd_only"`). Параметризация не выполняется.
 
 ### Выбор для MVP
 

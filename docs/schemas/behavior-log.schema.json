@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Behavior Log Schema (v1)",
+  "description": "Схема записи в JSONL-логе поведения terio",
+  "type": "object",
+  "required": ["timestamp", "kind", "request_hash"],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Время события (ISO8601)"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["agent_turn", "command_run", "script_run"],
+      "description": "Тип записи"
+    },
+    "request_hash": {
+      "type": "string",
+      "description": "SHA-256 нормализованного запроса (может быть пустым для terio run)"
+    },
+    "script_id": {
+      "type": "string",
+      "description": "ID скрипта из кеша (только для script_run)"
+    },
+    "cache_hit": {
+      "type": "boolean",
+      "description": "Был ли это cache hit"
+    },
+    "model_called": {
+      "type": "boolean",
+      "description": "Вызывалась ли модель"
+    },
+    "model_provider": {
+      "type": "string",
+      "description": "Провайдер модели (ollama, openai, anthropic)"
+    },
+    "tokens_used": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Потраченные токены"
+    },
+    "commands": {
+      "type": "array",
+      "description": "Выполненные команды",
+      "items": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "argv_redacted": {
+            "type": "array",
+            "description": "Аргументы с редэкцией секретов",
+            "items": { "type": "string" }
+          },
+          "exit_code": { "type": "integer" },
+          "duration_ms": { "type": "integer", "minimum": 0 },
+          "stdout_summary": {
+            "type": "string",
+            "description": "Первые 512 символов stdout"
+          },
+          "stderr_summary": {
+            "type": "string",
+            "description": "Первые 512 символов stderr"
+          },
+          "risk": {
+            "type": "string",
+            "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"]
+          }
+        }
+      }
+    },
+    "failure_kind": {
+      "type": "string",
+      "enum": ["command_error", "timeout", "cancelled", "precondition_failed", "validation_error"],
+      "description": "Тип ошибки, если была"
+    },
+    "attention_cost": {
+      "type": "object",
+      "description": "Раздельная стоимость внимания",
+      "properties": {
+        "user_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Секунд внимания пользователя"
+        },
+        "agent_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Секунд внимания агента (LLM)"
+        },
+        "system_sec": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Секунд внимания ОС/программ"
+        }
+      }
+    },
+    "request_preview": {
+      "type": "string",
+      "description": "Первые 512 символов запроса (с редэкцией)",
+      "maxLength": 512
+    }
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Output Schema (MVP)",
+  "description": "Структурированный план, возвращаемый AI-моделью в terio",
+  "type": "object",
+  "required": ["summary", "risk", "commands"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Краткое описание плана для UI подтверждения",
+      "maxLength": 512
+    },
+    "risk": {
+      "type": "string",
+      "description": "Общий risk плана",
+      "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"]
+    },
+    "commands": {
+      "type": "array",
+      "description": "Массив команд для немедленного выполнения",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["command", "argv", "risk", "reason"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Имя исполняемого файла (должен быть в known_commands)"
+          },
+          "argv": {
+            "type": "array",
+            "description": "Аргументы команды (argv[0] = command)",
+            "minItems": 1,
+            "items": { "type": "string" }
+          },
+          "risk": {
+            "type": "string",
+            "description": "Риск данной команды",
+            "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Объяснение для UI подтверждения",
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "expected_output": {
+      "type": "string",
+      "description": "Что ожидается на выходе (для выбора renderer)",
+      "maxLength": 256
+    },
+    "cache_template": {
+      "type": "object",
+      "description": "Template для Script Cache (опционально)",
+      "properties": {
+        "parameters": {
+          "type": "object",
+          "description": "Параметры скрипта",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["source"],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": ["glob_one", "default"]
+              },
+              "pattern": { "type": "string" },
+              "value": { "type": "string" },
+              "required": { "type": "boolean" }
+            }
+          }
+        },
+        "preconditions": {
+          "type": "array",
+          "description": "Условия перед выполнением",
+          "items": {
+            "type": "object",
+            "required": ["binary_exists"],
+            "properties": {
+              "binary_exists": { "type": "string" },
+              "glob_one": { "type": "string" },
+              "file_exists": { "type": "string" }
+            }
+          }
+        },
+        "steps": {
+          "type": "array",
+          "description": "Шаги для повторного выполнения (replay template)",
+          "items": {
+            "type": "object",
+            "required": ["command", "argv", "risk"],
+            "properties": {
+              "command": { "type": "string" },
+              "argv": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "risk": {
+                "type": "string",
+                "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"]
+              },
+              "description": { "type": "string" },
+              "timeout_secs": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "description": "Ожидаемые артефакты",
+          "items": {
+            "type": "object",
+            "required": ["path_glob", "kind"],
+            "properties": {
+              "path_glob": { "type": "string" },
+              "kind": {
+                "type": "string",
+                "enum": ["created_file", "modified_file", "deleted_file"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
