@@ -4,57 +4,55 @@
 
 ### Первый раз
 
-Пользователь хочет нарезать FLAC/CUE альбом. Он открывает terio и вводит:
+Пользователь вводит:
 
 ```
 terio ask "split this flac/cue album into separate tracks"
 ```
 
-1. Request Matcher ищет в кеше. Пусто.
-2. Запрос уходит к AI-модели.
-3. Модель анализирует CWD, находит `album.flac` и `album.cue`, возвращает план:
+1. Request Matcher ищет exact match в кеше. Пусто.
+2. Запрос уходит к модели. Модель получает: CWD, список файлов (`album.flac`, `album.cue`).
+3. Модель возвращает structured plan:
 
 ```
 План (2 шага):
-  1. mkdir -p ./tracks
-     (создать директорию для треков)
-  2. ffmpeg -i album.flac -i album.cue -map 0:0 -c copy -f segment ...
-     (разделить по CUE, сохранить в ./tracks/)
+  1. mkdir -p ./tracks                 local_write
+  2. ffmpeg -i album.flac -i album.cue ...  local_write
   Риск: local_write
-  Выполнить? [Y/n] (показать полный trace)
+  Выполнить? [Y/n]
 ```
 
-4. Пользователь подтверждает. terio выполняет, показывает таблицу треков.
-5. Цепочка сохраняется в кеше: `"split this flac/cue album into separate tracks" → [скрипт]`.
+4. Подтверждение → выполнение → таблица треков.
+5. Цепочка сохраняется в Script Cache: `"split flac cue album into separate tracks" → {...}`.
 
 ### Второй раз (другой альбом)
 
+Тот же запрос → exact match → скрипт найден.
+
+terio:
+- Заполняет параметры: `*.flac` → `best_of.flac`, `*.cue` → `best_of.cue`.
+- Проверяет preconditions: ffmpeg есть, файлы есть.
+- Выполняет **без модели**. Показывает таблицу.
+
+### Auto-run
+
+После 3 успехов скрипт получает `trusted`. При exact match + risk <= local_write → выполняется без запроса.
+
+### Если ошибка
+
+Скрипт не нашёл `live.cue`:
+
 ```
-terio ask "split this flac/cue album into separate tracks"
+Script failed (run_id: ...): precondition *.cue not found
+  Call model with error context? [Y/n]
 ```
 
-1. Request Matcher находит скрипт.
-2. terio проверяет: есть ли flac/cue файлы в CWD? Да.
-3. Скрипт выполняется **без вызова модели**. Результат — таблица. Быстро, дёшево.
+Пользователь может вызвать модель для исправления.
 
-### Третий раз (доверие)
+## Что демонстрирует сценарий
 
-После 3 успешных выполнений скрипт получает статус `trusted`. terio больше не спрашивает подтверждения для `local_write`.
-
-### Если что-то пошло не так
-
-Если скрипт упал (нет ffmpeg, нет файла), terio показывает ошибку:
-
-```
-Script failed: ffmpeg not found
-Falling back to agent.
-```
-
-Модель анализирует ошибку и предлагает исправленный план.
-
-## Что демонстрирует этот сценарий
-
-1. **Ленивое обучение** — terio не требует предварительной настройки. Просто работаете.
-2. **Кеширование поведения** — второй раз без модели.
-3. **Безопасность** — план показывается, destructive требует подтверждения.
-4. **Авто-расширение scope** — завтра пользователь может спросить `terio ask "show my github issues"`, и terio научится работать с `gh`.
+1. **Агрегатор интерфейсов.** terio управляет ffmpeg, mkdir, файловой системой — из одной точки.
+2. **Ленивое обучение.** Не требует настройки. Просто работаете.
+3. **Кеш поведения.** Второй раз без модели.
+4. **Безопасность.** План показывается. Destructive — подтверждение.
+5. **Метрики.** `terio stats` покажет: model_calls, cache_hits, tokens_saved.

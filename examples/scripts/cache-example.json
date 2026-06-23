@@ -1,33 +1,47 @@
 {
-  "request_hash": "sha256-abc123def456",
-  "normalized": "split this flac cue album into separate tracks",
+  "schema_version": 1,
+  "script_id": "sha256-abc123def456",
+  "normalized_request": "split flac cue album into separate tracks",
+  "match_policy": "exact_normalized",
   "risk": "local_write",
-  "success_count": 3,
-  "max_success_count": 3,
-  "trusted": true,
-  "created_at": "2026-06-23T10:00:00Z",
-  "last_used_at": "2026-06-23T14:00:00Z",
-  "script": [
+  "parameters": {
+    "flac_file": {"source": "glob", "pattern": "*.flac", "required": true},
+    "cue_file": {"source": "glob", "pattern": "*.cue", "required": true},
+    "output_dir": {"source": "default", "value": "./tracks"}
+  },
+  "preconditions": [
+    {"binary_exists": "ffmpeg"},
+    {"glob_one": "*.flac"},
+    {"glob_one": "*.cue"}
+  ],
+  "steps": [
     {
       "command": "mkdir",
-      "argv": ["-p", "./tracks"],
+      "argv": ["-p", "${output_dir}"],
       "risk": "local_write",
       "description": "Create output directory"
     },
     {
       "command": "ffmpeg",
       "argv": [
-        "-i", "album.flac",
-        "-i", "album.cue",
+        "-i", "${flac_file}",
+        "-i", "${cue_file}",
         "-map", "0:0",
         "-c", "copy",
         "-f", "segment",
         "-segment_times", "0 180 360 540",
-        "./tracks/track_%02d.flac"
+        "./${output_dir}/track_%02d.flac"
       ],
       "risk": "local_write",
       "description": "Split FLAC by CUE timings",
       "timeout_secs": 300
     }
-  ]
+  ],
+  "artifacts": [
+    {"path_glob": "./${output_dir}/*.flac", "kind": "created_file"}
+  ],
+  "success_count": 0,
+  "trust_threshold": 3,
+  "created_at": "2026-06-23T12:00:00Z",
+  "last_used_at": "2026-06-23T12:00:00Z"
 }

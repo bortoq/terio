@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "block_id": "BLK001",
-  "run_id": "R005",
+  "run_id": "R006",
   "type": "table",
   "title": "Track Split Results",
   "status": "success",
@@ -20,7 +20,7 @@
   ],
   "summary": "5 tracks extracted in 12.3s",
   "actions": [
-    {"label": "Open folder", "kind": "command", "risk": "read_only", "command": "xdg-open /home/user/music/tracks"},
-    {"label": "Play album", "kind": "command", "risk": "read_only", "command": "mpv /home/user/music/tracks"}
+    {"label": "Play album", "kind": "command", "risk": "local_write", "command": "mpv /home/user/music/tracks"},
+    {"label": "Open folder", "kind": "command", "risk": "read_only", "command": "xdg-open /home/user/music/tracks"}
   ]
 }

@@ -1,81 +1,78 @@
 # Roadmap
 
-## Фаза 0: Определение
+## 0. Определение
 
-- [x] Сформулировать суть: агентный терминал, который кеширует успешные цепочки.
-- [x] Scope расширяется лениво — от пользовательских запросов, а не от заранее спроектированных коннекторов.
-- [x] Выбрать стек: Rust, CLI-first.
-- [x] Написать docs/mvp.md, docs/trust-model.md, docs/behavior-log.md.
-- [x] Добавить LICENSE.
-- [ ] Создать Cargo.toml и базовую src/ структуру.
+- [x] Сформулировать суть: агрегатор интерфейсов. Все программы с CLI/API — из одной точки.
+- [x] Scope расширяется лениво — от пользовательских запросов.
+- [x] Стек: Rust, CLI-first.
+- [x] docs/mvp.md, docs/trust-model.md, docs/behavior-log.md, docs/agent-protocol.md.
+- [x] LICENSE.
+- [ ] Cargo.toml и базовая src/ структура.
 - [ ] CI: линтер + сборка.
 
-## Фаза 1: Agent MVP
+## 1. Agent MVP
 
-**terio ask + agent + cache — ядро продукта.**
+`terio ask` + agent + script cache — ядро.
 
-- [ ] `terio ask "..."` — запрос к модели (провайдер конфигурируется).
+- [ ] `terio ask "..."` — запрос к модели.
 - [ ] Модель возвращает structured plan (command + argv).
-- [ ] План показывается пользователю: подтверждение перед выполнением.
-- [ ] Выполнение: shell commands, захват stdout/stderr/exit code/duration.
-- [ ] Plain text renderer + table renderer (авто-определение).
-- [ ] Script Cache: успешная цепочка → сохранение по запросу.
-- [ ] Request Matcher: второй раз тот же запрос → скрипт без модели.
-- [ ] JSONL лог (schema v1: agent_turn, command_run, script_run).
-- [ ] Risk check: destructive/network_write → всегда подтверждение.
-- [ ] `terio rerun`, `terio log`, `terio cancel`.
+- [ ] План → подтверждение → выполнение.
+- [ ] `terio run -- <command>` — shell без модели.
+- [ ] Plain + table renderer.
+- [ ] Script Cache: успех → сохранение с параметрами/preconditions.
+- [ ] Request Matcher: exact normalized match.
+- [ ] JSONL лог (agent_turn, command_run, script_run).
+- [ ] Метрики: model_calls, cache_hits, errors (счётчики).
+- [ ] Risk: destructive/network_write → всегда подтверждение.
+- [ ] `terio rerun`, `terio log`, `terio cancel`, `terio stats`.
 
-**Критерий:** `terio ask "list files"` — модель генерирует `ls -l`, terio показывает таблицу. Повторный `terio ask "list files"` — без модели.
+**Критерий:** `terio ask "list files"` — модель генерирует `ls -l`, terio показывает таблицу. Повторный запрос — без модели. `terio stats` показывает сколько вызовов сэкономлено.
 
-## Фаза 2: Trust + безопасность
+## 2. Trust + безопасность
 
 - [ ] Risk taxonomy во всех компонентах.
-- [ ] Redaction secrets до отправки в модель и до записи в лог.
-- [ ] Policy: always_ask / ask_once / allow для каждого risk level.
-- [ ] Confidence: авто-запуск скрипта после N успехов.
-- [ ] `terio config` — управление политиками и провайдерами.
+- [ ] Redaction до модели и до лога.
+- [ ] Policy: always_ask / ask_once / allow.
+- [ ] Auto-run: exact match + risk <= local_write + N успехов.
+- [ ] Fuzzy match: никогда auto-run, только с подтверждением.
+- [ ] Agent risk — рекомендательный. terio вычисляет финальный.
+- [ ] `terio config`.
 
-**Критерий:** destructive-запросы требуют подтверждения. Secrets не видны модели и не пишутся в лог.
+**Критерий:** destructive требует подтверждения. Fuzzy match не auto-run.
 
-## Фаза 3: Undo/Redo (Experimental)
+## 3. Undo/Redo (Experimental)
 
-- [ ] Режим sandbox: bubblewrap/overlay FS для изоляции.
-- [ ] Режим warn: только предупреждение перед destructive-действиями.
-- [ ] Snapshot файлов перед скриптом (best-effort).
+- [ ] Sandbox (bubblewrap/overlay FS).
+- [ ] Warn (только предупреждение).
+- [ ] Best-effort snapshot для скриптов.
 - [ ] `terio undo`, `terio redo`.
-- [ ] Конфиг: UNDO_MODE = off | sandbox | warn.
-- [ ] По умолчанию: off.
+- [ ] Off by default.
 
-**Критерий:** пользователь включил sandbox → `terio ask "delete temp files"` → файлы в корзине, `terio undo` восстанавливает.
+## 4. Расширение рендеринга
 
-## Фаза 4: Расширение рендеринга
+- [ ] Timeline (git log).
+- [ ] Card (статусы).
+- [ ] Progress (длинные операции).
+- [ ] Readable page (лог, новости).
+- [ ] Авто-выбор renderer.
 
-- [ ] Timeline renderer (git log, хронология).
-- [ ] Card renderer (статусы, предупреждения).
-- [ ] Progress renderer (длинные операции).
-- [ ] Readable page renderer (лог, новости).
-- [ ] Авто-выбор renderer по типу вывода.
+**Критерий:** `git log` — timeline.
 
-**Критерий:** `git log` показывается как timeline.
+## 5. Рабочая среда
 
-## Фаза 5: Рабочая среда
-
-- [ ] `terio stats` — экономия LLM-вызовов.
-- [ ] `terio script list` — просмотр кеша скриптов.
-- [ ] `terio script remove <hash>` — удаление скрипта.
+- [ ] `terio script list`, `terio script remove`.
 - [ ] Управление скриптами через `$EDITOR`.
+- [ ] `terio stats` — детальная агрегация из лога.
 
-**Критерий:** пользователь видит, сколько LLM-вызовов сэкономлено.
+## 6. Интеграции (ленивые)
 
-## Фаза 6: Интеграции (ленивые)
+- [ ] Каждая новая программа — через запрос пользователя.
+- [ ] terio учится работать с Git, GitHub, медиа, Docker и т.д.
+- [ ] Никаких заранее написанных коннекторов.
 
-- [ ] Каждая новая интеграция — просто новый запрос пользователя.
-- [ ] terio учится управлять Git, GitHub, медиа, браузером, Docker и т.д. — когда пользователь спросит.
-- [ ] Никаких заранее написанных коннекторов. Только то, что попросил пользователь и подтвердил.
+## 7. Desktop + сообщество
 
-## Фаза 7: Desktop / Sharing
-
-- [ ] Desktop-сборка (Rust + webview).
+- [ ] Desktop (Rust + webview).
 - [ ] Экспорт/импорт скриптов.
-- [ ] Шэринг сессий (read-only).
-- [ ] Реестр скриптов (сообщество).
+- [ ] Шэринг сессий.
+- [ ] Реестр скриптов.
