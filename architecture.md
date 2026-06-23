@@ -2,7 +2,7 @@
 
 ## Overview
 
-Web Terminal is a standalone interface layer that combines shell execution, web-rendered output, agent control, behavior compilation, modal workspaces, and connectors to external functions.
+terio is a standalone interface layer that combines shell execution, web-rendered output, agent control, behavior compilation, modal workspaces, and connectors to external functions.
 
 The first architecture should stay local-first. The terminal runs commands in the user's environment, records workflows, renders selected outputs as structured views, and only calls an LLM when reasoning is actually needed.
 
@@ -32,7 +32,7 @@ The first architecture should stay local-first. The terminal runs commands in th
 7. The Web Renderer chooses an appropriate display block.
 8. The Behavior Log stores the request, actions, arguments, result, and errors.
 9. The Behavior Compiler periodically detects repeated successful patterns.
-10. When a pattern is stable, Web Terminal offers or silently prepares a reusable behavior depending on risk level.
+10. When a pattern is stable, terio offers or silently prepares a reusable behavior depending on risk level.
 
 ## Behavior Compiler
 
@@ -50,7 +50,7 @@ Output should be rendered in the form that reduces attention cost. Plain text re
 
 ## Integration Boundary
 
-Web Terminal should start with engines that already expose usable control surfaces:
+terio should start with engines that already expose usable control surfaces:
 
 - command-line tools such as git, ffmpeg, curl, rsync, and package managers;
 - local files and open data formats;
@@ -58,7 +58,7 @@ Web Terminal should start with engines that already expose usable control surfac
 - Self OS delegation and trust components;
 - browser-readable content such as news feeds, search results, logs, and dashboards.
 
-GUI-heavy products whose functionality is inseparable from their interface are not first-phase targets. Web Terminal should not pretend to replace every application immediately.
+GUI-heavy products whose functionality is inseparable from their interface are not first-phase targets. terio should not pretend to replace every application immediately.
 
 ## Key Design Rule
 

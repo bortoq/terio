@@ -10,7 +10,7 @@ The user asks:
 
 `split this flac/cue album into tracks and name them like last time`
 
-Web Terminal:
+terio:
 
 - identifies the FLAC and CUE files in the current directory;
 - asks for confirmation if multiple candidates exist;
@@ -34,9 +34,9 @@ The variable arguments are:
 
 ## Replay
 
-Next time the user asks the same kind of request, Web Terminal does not call the LLM if confidence is high enough.
+Next time the user asks the same kind of request, terio does not call the LLM if confidence is high enough.
 
-It extracts the current arguments, validates that files exist, runs the compiled recipe, and shows the rendered result. If validation fails or the script exits with an error, Web Terminal downgrades confidence and falls back to the agent.
+It extracts the current arguments, validates that files exist, runs the compiled recipe, and shows the rendered result. If validation fails or the script exits with an error, terio downgrades confidence and falls back to the agent.
 
 ## Web Rendering
 
@@ -49,7 +49,7 @@ The output is not a raw wall of terminal text. The user sees:
 
 ## Modal Continuation
 
-If the user opens the CUE sheet or renaming template, Web Terminal switches to edit mode in the same workspace. After saving, the user returns to command mode and reruns the workflow.
+If the user opens the CUE sheet or renaming template, terio switches to edit mode in the same workspace. After saving, the user returns to command mode and reruns the workflow.
 
 ## Demo Goal
 

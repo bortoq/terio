@@ -4,7 +4,7 @@
 
 - Define the core promise: one command surface for local tools, web services, APIs, media, files, and agents.
 - Define the first narrow MVP workflow.
-- Define what Web Terminal is not: not a full OS, not a full browser replacement, not a universal Photoshop replacement.
+- Define what terio is not: not a full OS, not a full browser replacement, not a universal Photoshop replacement.
 - Define the trust model for compiled behavior.
 - Define the first rendered output block types.
 

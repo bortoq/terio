@@ -1,30 +1,30 @@
-# Web Terminal
+# terio
 
-Web Terminal is a terminal-based standalone interface for controlling local tools, web services, files, media, agents, and APIs from one workspace.
+terio is a terminal-based standalone interface for controlling local tools, web services, files, media, agents, and APIs from one workspace.
 
 ## Simple Description
 
-Web Terminal keeps the command-line power of a terminal, but renders results like a web interface. Commands can produce tables, cards, galleries, timelines, previews, controls, and long readable pages instead of plain scrolling text.
+terio keeps the command-line power of a terminal, but renders results like a web interface. Commands can produce tables, cards, galleries, timelines, previews, controls, and long readable pages instead of plain scrolling text.
 
-The product also learns repeated user behavior. If a user repeatedly asks for the same workflow, such as splitting a FLAC/CUE album, renaming tracks, copying files, resuming a playlist, or downloading a missing episode, Web Terminal can compile that workflow into a trusted script and run it next time without spending LLM tokens.
+The product also learns repeated user behavior. If a user repeatedly asks for the same workflow, such as splitting a FLAC/CUE album, renaming tracks, copying files, resuming a playlist, or downloading a missing episode, terio can compile that workflow into a trusted script and run it next time without spending LLM tokens.
 
 ## Full Description
 
 Most software forces the user to move between many separate interfaces: terminal, browser, file manager, editor, media player, service dashboards, and AI agent UIs. Each interface has its own commands, layout, shortcuts, state, and mental model. The user pays for that fragmentation with attention.
 
-Web Terminal treats the interface as its own layer. Programs, services, APIs, local tools, and agents remain separate execution engines. Web Terminal becomes the user's command surface and result surface. The user asks for an outcome, the right engine performs the work, and the terminal displays the result in the form that fits the task.
+terio treats the interface as its own layer. Programs, services, APIs, local tools, and agents remain separate execution engines. terio becomes the user's command surface and result surface. The user asks for an outcome, the right engine performs the work, and the terminal displays the result in the form that fits the task.
 
 This makes the terminal more than a shell emulator. It becomes an aggregator of control: a browser-like renderer, an agent interface, a workflow recorder, a modal workspace, and a bridge to local and remote functions.
 
 ## Product Principle
 
-User attention is the scarce resource. Every app switch, repeated command, hidden menu, manual copy step, and unnecessary LLM call has a cost. Web Terminal should reduce that cost without asking the user to learn a new automation language.
+User attention is the scarce resource. Every app switch, repeated command, hidden menu, manual copy step, and unnecessary LLM call has a cost. terio should reduce that cost without asking the user to learn a new automation language.
 
 ## Market Context
 
 Existing terminals are powerful but mostly text-first. Existing AI terminals add natural language help, but still tend to output blocks of plain text and rerun reasoning for repeated tasks. Existing browsers are excellent renderers, but weak command surfaces. Existing automation tools require users to design workflows in advance.
 
-Web Terminal sits between terminals, browsers, and AI agent interfaces. It keeps terminal control, adds browser-grade rendering, and uses an agent only where reasoning is needed. Repeated behavior should become cheaper and faster over time.
+terio sits between terminals, browsers, and AI agent interfaces. It keeps terminal control, adds browser-grade rendering, and uses an agent only where reasoning is needed. Repeated behavior should become cheaper and faster over time.
 
 ## Main Use Cases
 
@@ -50,14 +50,14 @@ Web Terminal sits between terminals, browsers, and AI agent interfaces. It keeps
 
 ## Similar Projects And Difference
 
-- Plan 9 pursued a unified computing environment, but required a different system model. Web Terminal should work on top of existing systems.
+- Plan 9 pursued a unified computing environment, but required a different system model. terio should work on top of existing systems.
 - TermKit explored browser-like terminal output, but lacked modern agents and behavior compilation.
 - Hyper proved that terminals can be built with web technology, but did not redefine the terminal as a control layer.
 - Extraterm treated command output as objects, but did not combine this with agentic workflow learning.
-- Warp added AI to the terminal, but Web Terminal's core bet is broader: web rendering, compiled behavior, modal workspace, and interface aggregation.
+- Warp added AI to the terminal, but terio's core bet is broader: web rendering, compiled behavior, modal workspace, and interface aggregation.
 - Blink Shell demonstrates mobile terminal workflows and Mosh support, but is not a browser-like agentic workspace.
 
-The main difference is that Web Terminal is not only a nicer terminal. It is a standalone interface layer between the user and executable functions.
+The main difference is that terio is not only a nicer terminal. It is a standalone interface layer between the user and executable functions.
 
 ## Risks
 
