@@ -90,8 +90,8 @@ terio — агрегатор интерфейсов. Любая программ
     "match_policy": "exact_normalized",
     "risk": "local_write",
     "parameters": {
-      "flac_file": {"source": "glob", "pattern": "*.flac", "required": true},
-      "cue_file": {"source": "glob", "pattern": "*.cue", "required": true},
+      "flac_file": {"source": "glob_one", "pattern": "*.flac", "required": true},
+      "cue_file": {"source": "glob_one", "pattern": "*.cue", "required": true},
       "output_dir": {"source": "default", "value": "./tracks"}
     },
     "preconditions": [
@@ -101,7 +101,7 @@ terio — агрегатор интерфейсов. Любая программ
     ],
     "steps": [
       {"command": "mkdir", "argv": ["-p", "${output_dir}"], "risk": "local_write"},
-      {"command": "ffmpeg", "argv": ["-i", "${flac_file}", "-i", "${cue_file}", "-map", "0:0", "-c", "copy", "-f", "segment", "./${output_dir}/track_%02d.flac"], "risk": "local_write"}
+      {"command": "ffmpeg", "argv": ["-i", "${flac_file}", "-i", "${cue_file}", "-map", "0:0", "-c", "copy", "-f", "segment", "${output_dir}/track_%02d.flac"], "risk": "local_write"}
     ],
     "artifacts": [{"path_glob": "./${output_dir}/*.flac", "kind": "created_file"}],
     "success_count": 0,
@@ -127,7 +127,7 @@ terio — агрегатор интерфейсов. Любая программ
 ### 8. Trust Engine
 - Risk levels: read_only, local_write, destructive, network_read, network_write, credential_access, financial.
 - Политики: `always_ask`, `ask_once`, `allow`.
-- **Auto-run** (MVP): только exact normalized match, risk <= local_write, script success_count >= trust_threshold, preconditions пройдены.
+- **Auto-run** (MVP): только exact normalized match + risk <= local_write + success_count >= trust_threshold + все parameters resolved однозначно + preconditions пройдены + все output внутри CWD или разрешённой директории + нет destructive/network_write шагов + пользователь не отключал auto-run + предыдущий запуск был успешен в эквивалентном контексте.
 - **Fuzzy match:** никогда не auto-run в MVP. Только предложить и спросить.
 - **Model risk:** рекомендательный. terio вычисляет финальный risk по команде.
 

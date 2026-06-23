@@ -1,12 +1,14 @@
 {
   "schema_version": 1,
-  "script_id": "sha256-abc123def456",
+  "script_id": "01JAN3XSCACHE001",
+  "request_hash": "sha256-abc123def456",
+  "version": 1,
   "normalized_request": "split flac cue album into separate tracks",
   "match_policy": "exact_normalized",
   "risk": "local_write",
   "parameters": {
-    "flac_file": {"source": "glob", "pattern": "*.flac", "required": true},
-    "cue_file": {"source": "glob", "pattern": "*.cue", "required": true},
+    "flac_file": {"source": "glob_one", "pattern": "*.flac", "required": true},
+    "cue_file": {"source": "glob_one", "pattern": "*.cue", "required": true},
     "output_dir": {"source": "default", "value": "./tracks"}
   },
   "preconditions": [
@@ -30,15 +32,15 @@
         "-c", "copy",
         "-f", "segment",
         "-segment_times", "0 180 360 540",
-        "./${output_dir}/track_%02d.flac"
+        "${output_dir}/track_%02d.flac"
       ],
       "risk": "local_write",
-      "description": "Split FLAC by CUE timings",
+      "description": "Split FLAC by CUE timings (illustrative — segment_times computed per album in production)",
       "timeout_secs": 300
     }
   ],
   "artifacts": [
-    {"path_glob": "./${output_dir}/*.flac", "kind": "created_file"}
+    {"path_glob": "${output_dir}/*.flac", "kind": "created_file"}
   ],
   "success_count": 0,
   "trust_threshold": 3,

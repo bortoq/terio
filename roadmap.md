@@ -14,19 +14,40 @@
 
 `terio ask` + agent + script cache — ядро.
 
-- [ ] `terio ask "..."` — запрос к модели.
-- [ ] Модель возвращает structured plan (command + argv).
-- [ ] План → подтверждение → выполнение.
-- [ ] `terio run -- <command>` — shell без модели.
-- [ ] Plain + table renderer.
-- [ ] Script Cache: успех → сохранение с параметрами/preconditions.
-- [ ] Request Matcher: exact normalized match.
-- [ ] JSONL лог (agent_turn, command_run, script_run).
-- [ ] Метрики: model_calls, cache_hits, errors (счётчики).
-- [ ] Risk: destructive/network_write → всегда подтверждение.
-- [ ] `terio rerun`, `terio log`, `terio cancel`, `terio stats`.
+### 1A: Shell execution + базовый лог
 
-**Критерий:** `terio ask "list files"` — модель генерирует `ls -l`, terio показывает таблицу. Повторный запрос — без модели. `terio stats` показывает сколько вызовов сэкономлено.
+- [ ] Cargo.toml, src/main.rs, src/cli.rs, src/run.rs.
+- [ ] `terio run -- <command>` — shell без модели.
+- [ ] Захват stdout, stderr, exit code, duration.
+- [ ] `terio rerun`.
+- [ ] Plain renderer.
+- [ ] JSONL лог (command_run).
+- [ ] CI: cargo test + cargo build.
+
+**Критерий:** `terio run -- echo hello`, `terio run -- ls -l`, `terio log`.
+
+### 1B: Mock agent + exact cache (без реальной модели)
+
+- [ ] `terio ask "list files"` — mock: если request == "list files", вернуть `ls -l`.
+- [ ] Script Cache: первый ask → сохранить chain.
+- [ ] Request Matcher: exact normalized match.
+- [ ] Повторный `terio ask "list files"` — cache hit, без mock/model.
+- [ ] `terio stats` — model_calls, cache_hits.
+- [ ] Table renderer.
+
+**Критерий:** `terio ask "list files"` (первый) → mock. Повторный → cache hit, быстрее, без вызова. `terio stats` показывает cache_hits > 0.
+
+### 1C: Реальный LLM provider
+
+- [ ] Конфигурация провайдера (OpenAI, Anthropic, ollama).
+- [ ] Agent возвращает structured plan (command + argv).
+- [ ] План → подтверждение → выполнение.
+- [ ] Script Cache: model возвращает cache_template → terio сохраняет.
+- [ ] Risk: destructive/network_write → всегда подтверждение.
+- [ ] Redaction secrets до отправки в модель.
+- [ ] `terio cancel`.
+
+**Критерий:** `terio ask "list files"` — реальная модель генерирует `ls -l`, terio показывает таблицу. Secrets не уходят в модель.
 
 ## 2. Trust + безопасность
 

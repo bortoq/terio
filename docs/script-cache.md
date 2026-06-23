@@ -13,7 +13,9 @@ JSON.
 | Поле | Тип | Описание |
 |------|-----|----------|
 | `schema_version` | int | 1 |
-| `script_id` | string | SHA-256 нормализованного запроса |
+| `script_id` | string | ULID или SHA-256 содержимого (уникальный, меняется при изменении) |
+| `request_hash` | string | SHA-256 нормализованного запроса (для поиска) |
+| `version` | int | Инкремент при изменении скрипта для того же запроса |
 | `normalized_request` | string | Нормализованный текст запроса |
 | `match_policy` | string | `exact_normalized` (MVP) |
 | `risk` | string | Общий risk скрипта |
@@ -31,7 +33,7 @@ JSON.
 ```json
 "parameters": {
   "flac_file": {
-    "source": "glob",
+    "source": "glob_one",
     "pattern": "*.flac",
     "required": true
   },
@@ -42,7 +44,7 @@ JSON.
 }
 ```
 
-- `source: glob` — ищет файлы по pattern в CWD. Берётся первый.
+- `source: glob_one` — ищет файлы по pattern в CWD. Требуется ровно один файл. Если найдено 0 или >1 — terio спрашивает пользователя.
 - `source: default` — фиксированное значение.
 - `required: true` — выполнение невозможно без этого параметра.
 
@@ -56,10 +58,6 @@ JSON.
 ]
 ```
 
-- `binary_exists` — проверяет, что команда доступна в PATH.
-- `glob_one` — в CWD есть хотя бы один файл по glob.
-- `file_exists` — конкретный файл существует.
-
 ## Artifacts
 
 ```json
@@ -68,9 +66,46 @@ JSON.
 ]
 ```
 
-Для renderer, future undo, cleanup.
+## Generation Pipeline (MVP)
+
+После успешного выполнения через Agent Layer cache entry создаётся так:
+
+### Option A: Agent возвращает cache_template (рекомендуется)
+
+Модель возвращает не только plan, но и template для кеша:
+
+```json
+{
+  "summary": "...",
+  "risk": "local_write",
+  "commands": [...],
+  "cache_template": {
+    "parameters": { ... },
+    "preconditions": [ ... ],
+    "artifacts": [ ... ]
+  }
+}
+```
+
+terio валидирует template и показывает пользователю перед сохранением.
+
+### Option B: Фиксированный plan (запасной)
+
+Если модель не вернула cache_template, terio сохраняет точный structured plan для данного CWD.
+Cache entry работает только при exact match запроса И том же CWD. Параметризация не выполняется.
+
+### Выбор для MVP
+
+MVP использует Option A как основной. Если модель не поддерживает — Option B.
 
 ## Match Policy (MVP)
 
 - Только `exact_normalized`: нормализованный запрос совпадает полностью.
-- Fuzzy match — в будущем, с подтверждением, никогда auto-run.
+- Fuzzy match — в будущем, с подтверждением пользователя, никогда auto-run.
+
+## Versioning
+
+- `request_hash` — хеш нормализованного запроса. Используется для поиска.
+- `script_id` — ULID или SHA-256 содержимого. Меняется при изменении скрипта.
+- `version` — инкремент для того же request_hash.
+- Это позволяет различать разные версии скрипта для одного запроса.
