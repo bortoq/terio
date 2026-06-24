@@ -1,6 +1,13 @@
 # Roadmap
 
-## 0. Определение
+Проект разделён на две независимые дорожки:
+
+- **Core** — CLI/backend. Собирается без system deps (`cargo build --no-default-features`).
+- **Shell** — Dioxus UI. Требует `feature desktop` = GTK3/webkit2gtk-dev на Linux.
+
+Фаза считается пройденной, когда сделаны **все её пункты** (Core + Shell). Core и Shell внутри одной фазы можно делать параллельно — они не блокируют друг друга.
+
+## 0. Определение (архитектура)
 
 - [x] Сформулировать суть: агрегатор интерфейсов. Все программы с CLI/API — из одной точки.
 - [x] Scope расширяется лениво — от пользовательских запросов.
@@ -16,110 +23,148 @@
 - [x] Cargo.toml и базовая src/ структура.
 - [x] CI: линтер + сборка.
 
-## 1. Минимальный UI + shell + лог
+## 1. Shell + log + scaffold
 
-**Принцип:** terio — оконное приложение с первого коммита. Dioxus webview — основной UI. CLI (`terio run --`) — дополнительный интерфейс для автоматизации и отладки.
-
-- [x] Cargo.toml, src/main.rs, src/cli.rs, src/ui/app.rs, src/run.rs.
-- [x] Dioxus webview: окно с полем ввода и областью вывода (требуется `feature desktop`)
+### Core
 - [x] `terio run -- <command>` — shell без модели.
 - [x] Захват stdout, stderr, exit code, duration.
-- [x] **Identity:** instance_id (ULID) генерируется при первом запуске; session_id (UUID) на каждый запуск.
-- [x] **LogWriter trait + JsonlLogWriter:** append (validate → write → broadcast).
-- [x] **LogReader trait + JsonlLogReader:** recent(n), by_session(), by_interaction().
-- [x] **LogStore:** writer + reader + broadcaster.
-- [x] **Accounting:** cost_counters required+nested в каждой записи; aggregate; заглушка compute_attention_cost.
-- [x] **display_profile:** required nested поля (type, renderer_hint, user_visible).
-- [x] Dioxus показывает лог (plain text) через `LogStore::recent(50)` при запуске. Live-stream — Phase 6+.
+- [x] Identity: instance_id (ULID) + session_id (UUID v4).
+- [x] LogWriter trait + JsonlLogWriter: append → validate → write.
+- [x] LogReader trait + JsonlLogReader: recent(n), by_session(), by_interaction().
+- [x] LogStore: writer + reader + broadcaster.
+- [x] Accounting: cost_counters в каждой записи; aggregate; заглушка compute_attention_cost.
+- [x] display_profile: required nested поля (type, renderer_hint, user_visible).
 - [x] `terio log --json` — история в JSON.
 - [x] CI: cargo test + cargo build.
 
-**Критерий:** `cargo run` открывает Dioxus-окно с логом. `terio run -- ls -l` → запись в логе, отображается в окне при следующем запуске или через Refresh. `terio log --json` показывает cost_counters и display_profile.
+### Shell
+- [x] Dioxus scaffold: окно, поле ввода, область вывода (`feature desktop`).
+- [x] Dioxus показывает лог (plain text) через `LogStore::recent(50)` при запуске.
 
-## 2. Mock agent + кеш (без реальной модели)
+**Критерий:** `cargo run` открывает Dioxus-окно с логом. `terio run -- ls -l` → запись в лог. `terio log --json` показывает cost_counters и display_profile.
 
-- [x] `terio ask "list files"` — mock: 6 запросов, hardcoded планы.
+## 2. Mock agent + cache + redact + risk
+
+### Core
+- [x] `terio ask "list files"` — mock: 6 hardcoded запросов.
 - [x] Script Cache: первый ask → сохранить chain (JSON в `~/.terio/cache/`).
 - [x] Request Matcher: exact normalized match (lowercase+trim+collapse + SHA-256).
 - [x] Повторный `terio ask "list files"` — cache hit, без mock.
 - [x] `terio stats` — model_calls, cache_hits, cost_counters.
-- [ ] Table renderer в Dioxus.
-- [x] Redact: Bearer, api_key, token, SSH ключи, URL credentials.
-- [x] Risk classifier: git clean/reset/ push, curl -X POST, docker rm/rmi, cat .ssh и т.д.
-- [x] Группировка по interaction_id в логе (поле есть, группировка через `by_interaction`).
+- [x] Redact: Bearer, api_key, token, SSH key, URL credentials.
+- [x] Risk classifier: git clean/reset/push, curl -X POST, docker rm/rmi, cat .ssh и т.д.
+- [x] Группировка по interaction_id в логе (поле + `by_interaction`).
+- [x] Исправления аудита: не кешировать non-zero exit, success_count_before/after, scope в CacheEntry, mock только read-only, LogReader::stream() убран, stats на всех записях, warning для destructive при `terio run`.
 
-**Критерий:** `terio ask "list files"` (первый) → mock, output. Повторный → cache hit, быстрее. `terio stats` показывает cache_hits > 0.
+### Shell
+- [ ] Table renderer в Dioxus (отображение команд и результатов в табличном виде).
+
+**Критерий:** `terio ask "list files"` (первый) → mock, вывод. Повторный → cache hit, быстрее. `terio stats` показывает cache_hits > 0.
 
 ## 3. Реальный LLM provider
 
-- [ ] Конфигурация провайдера (OpenAI, Anthropic, ollama).
-- [ ] Agent возвращает structured plan (command + argv).
-- [ ] cache_template с steps от модели → terio сохраняет.
-- [ ] План → подтверждение → выполнение.
-- [x] Script Cache: scope.cwd_policy (scope + cwd сохранены в CacheEntry, валидация — Phase 4).
+### Core
+- [ ] Конфигурация провайдера (OpenAI, Anthropic, ollama) → `terio config set provider`.
+- [ ] Agent возвращает structured plan (command + argv) от реальной модели.
+- [ ] cache_template с steps от модели → terio сохраняет в Script Cache.
+- [ ] План → подтверждение → выполнение (для risk >= local_write).
 - [ ] Risk: destructive/network_write → всегда подтверждение.
 - [ ] Redaction secrets до отправки в модель.
-- [ ] `terio cancel`.
+- [ ] `terio cancel` — прерывание выполнения.
 
-**Критерий:** `terio ask "list files"` — реальная модель генерирует `ls -l`, terio показывает таблицу. Secrets не уходят в модель.
+### Shell
+- [ ] Поле ввода для `terio ask` + кнопка отправки.
+- [ ] Отображение подтверждения (plan с risk) перед выполнением.
+- [ ] Индикатор выполнения (spinner/progress).
+
+**Критерий:** `terio ask "list files"` — реальная модель генерирует `ls -l`, terio показывает план, пользователь подтверждает, terio выполняет. Secrets не уходят в модель.
 
 ## 4. Trust + безопасность
 
-- [x] Risk taxonomy в run-компоненте (8 уровней).
-- [x] Redaction до лога (LogStore::append). Redaction до модели — Phase 3.
-- [ ] Policy: always_ask / ask_once / allow.
+### Core
+- [ ] Policy: always_ask / ask_once / allow (через `terio config`).
 - [ ] Auto-run: exact match + risk <= local_write + N успехов + scope соблюдён.
 - [ ] Fuzzy match: никогда auto-run, только с подтверждением.
-- [x] Agent risk — рекомендательный. terio вычисляет финальный через compute_risk().
 - [ ] Path boundary validation (защита от ../../).
-- [ ] `terio config`.
+- [ ] `terio config` — полное управление настройками.
+
+### Shell
+- [ ] Настройки в UI (окно конфигурации).
+- [ ] Индикатор trust level для каждой команды.
 
 **Критерий:** destructive требует подтверждения. Fuzzy match не auto-run. Path traversal blocked.
 
 ## 5. Undo/Redo (Experimental)
 
+### Core
 - [ ] Sandbox (bubblewrap/overlay FS).
 - [ ] Warn (только предупреждение).
 - [ ] Best-effort snapshot для скриптов.
 - [ ] `terio undo`, `terio redo`.
 - [ ] Off by default.
 
-## 6. Рендеринг + оконная система
+### Shell
+- [ ] Кнопки Undo/Redo в UI.
 
-- [ ] Timeline (git log).
-- [ ] Card (статусы).
+**Критерий:** `terio undo` откатывает последний cached скрипт (off by default).
+
+## 6. Продвинутый рендеринг + интерактивность
+
+### Core
+- [ ] Live-stream: LogStore broadcast подключается к Dioxus (вместо poll на `recent`).
+- [ ] `terio stats` с разделением cost_counters по типам.
+
+### Shell
+- [ ] Timeline (git log style).
+- [ ] Card (статусы, риски).
 - [ ] Progress (длинные операции).
 - [ ] Readable page (лог, новости).
 - [ ] Авто-выбор renderer на основе display_profile.
 - [ ] Блок → Window эволюция (каждый блок — будущее окно).
-- [ ] Чат-окно: последовательность встроенных окон (картинки, сообщения, результаты).
-- [ ] `terio stats` с разделением cost_counters.
-- [ ] Минимизация total_attention_cost при выборе маршрута (cache vs model).
+- [ ] Чат-окно: последовательность встроенных окон.
 
-**Критерий:** `git log` — timeline. `terio log` показывает пары (interaction_id).
+**Критерий:** `git log` — timeline. `terio log` показывает пары (interaction_id). Окно обновляется в реальном времени.
 
 ## 7. Интеграции (ленивые) + шэринг
 
+### Core
 - [ ] Каждая новая программа — через запрос пользователя.
 - [ ] terio учится работать с Git, GitHub, медиа, Docker и т.д.
 - [ ] Никаких заранее написанных коннекторов.
-- [ ] **Автоматическая интеграция:** агент идентифицирует программу, читает --help/man/wiki, пишет integration script, прогоняет тесты.
+- [ ] Автоматическая интеграция: агент идентифицирует программу, читает --help/man/wiki, пишет integration script, прогоняет тесты.
 - [ ] Интеграционный скрипт сохраняется в Script Cache.
-- [ ] **Шэринг:** копирование окон между экземплярами terio (через instance_id).
+
+### Shell
+- [ ] Окно интеграции: выбор программы, статус изучения.
+- [ ] Шэринг: копирование окон между экземплярами terio (через instance_id).
 - [ ] `terio share`, `terio receive`.
+
+**Критерий:** первый запуск `git log` → агент изучает git, пишет скрипт, terio сохраняет.
 
 ## 8. Оптимизация стоимости + предсказание
 
+### Core
 - [ ] Раздельные счётчики cost_counters в единой метрике total_attention_cost (реальные веса).
 - [ ] cache vs model: terio выбирает маршрут с минимальной total_attention_cost.
 - [ ] История стоимости: `terio cost` — отчёт по затратам.
 - [ ] Auto-tuning: terio предлагает выключить auto-run для дорогих скриптов.
-- [ ] **Pre-execution:** отдельный режим, terio предсказывает запрос до нажатия Enter, выполняет read_only шаги, показывает preview.
+- [ ] Pre-execution: отдельный режим, terio предсказывает запрос до нажатия Enter, выполняет read_only шаги, показывает preview.
+
+### Shell
+- [ ] Графики стоимости в UI.
+- [ ] Предпросмотр (preview) в окне.
+
+**Критерий:** `terio cost` — отчёт. terio выбирает cache вместо модели, если дешевле.
 
 ## 9. Desktop + сообщество + локальная LLM
 
-- [ ] **Desktop (standalone-пакет, system tray, автообновление).** До этого — Dioxus webview как встроенное окно.
+### Core
+- [ ] Локальная LLM: open-source модель с открытыми весами, обучаемая на базе скриптов пользователя.
+
+### Shell
+- [ ] Desktop (standalone-пакет, system tray, автообновление).
 - [ ] Экспорт/импорт скриптов.
-- [ ] **Документ = мультиокно:** объединение окон в документ, экспорт как документация.
+- [ ] Документ = мультиокно: объединение окон в документ, экспорт как документация.
 - [ ] Реестр скриптов.
-- [ ] **Локальная LLM:** open-source модель с открытыми весами, обучаемая на базе скриптов пользователя.
+
+**Критерий:** terio — standalone-приложение в system tray. Окна объединяются в документы.
