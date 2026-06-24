@@ -27,8 +27,6 @@ pub trait LogReader: Send + Sync {
     fn by_session(&self, session_id: &str) -> Result<Vec<LogEntry>>;
     /// Записи по interaction_id.
     fn by_interaction(&self, interaction_id: &str) -> Result<Vec<LogEntry>>;
-    /// Подписка на in-memory stream.
-    fn stream(&self) -> broadcast::Receiver<LogEntry>;
 }
 
 /// LogStore — объединяет writer + reader + broadcast.

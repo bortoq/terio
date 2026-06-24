@@ -72,6 +72,16 @@ fn handle_run(
         std::process::exit(1);
     }
 
+    // Предупреждение для destructive/network_write
+    let risk = run::compute_risk(&command[0], &command[1..]);
+    if risk == terio::types::RiskLevel::Destructive {
+        eprintln!("⚠️  ВНИМАНИЕ: destructive команда: {}", command.join(" "));
+    } else if risk == terio::types::RiskLevel::NetworkWrite {
+        eprintln!("⚠️  ВНИМАНИЕ: сетевая запись: {}", command.join(" "));
+    } else if risk == terio::types::RiskLevel::CredentialAccess {
+        eprintln!("⚠️  ВНИМАНИЕ: доступ к credentials: {}", command.join(" "));
+    }
+
     let result = match run::execute(command) {
         Ok(r) => r,
         Err(e) => {
@@ -140,10 +150,12 @@ fn handle_ask(identity: &Identity, log_dir: &std::path::Path, request: &str) -> 
             entry,
             results,
             total_duration,
+            all_exit_zero,
         } => {
+            let status = if all_exit_zero { "ok" } else { "FAIL" };
             eprintln!(
-                "[cache hit] {} (risk: {:?})",
-                entry.normalized_request, entry.risk
+                "[cache hit] {} [{}] (risk: {:?})",
+                entry.normalized_request, status, entry.risk
             );
             for (i, result) in results.iter().enumerate() {
                 if i > 0 {
@@ -160,11 +172,15 @@ fn handle_ask(identity: &Identity, log_dir: &std::path::Path, request: &str) -> 
             entry,
             results,
             total_duration,
+            all_exit_zero,
         } => {
-            eprintln!(
-                "[mock agent] {} (risk: {:?})",
-                entry.normalized_request, entry.risk
-            );
+            let cached = if entry.is_some() {
+                ", cached"
+            } else {
+                " (not cached)"
+            };
+            let status = if all_exit_zero { "ok" } else { "FAIL" };
+            eprintln!("[mock agent] {} [{}]{}", request, status, cached);
             for (i, result) in results.iter().enumerate() {
                 if i > 0 {
                     println!("---");
@@ -174,11 +190,11 @@ fn handle_ask(identity: &Identity, log_dir: &std::path::Path, request: &str) -> 
                     eprint!("{}", result.stderr);
                 }
             }
-            eprintln!("[done in {} ms, cached]", total_duration.as_millis());
+            eprintln!("[done in {} ms{}]", total_duration.as_millis(), cached);
         }
         AskResult::Unknown => {
             eprintln!("terio: не знаю, как ответить на \"{request}\".");
-            eprintln!("  Mock agent знает: list files, current directory, who am i, date and time, disk usage, create directory");
+            eprintln!("  Mock agent знает: list files, current directory, who am i, date and time, disk usage");
         }
     }
 
@@ -215,7 +231,25 @@ fn print_log_plain(entries: &[terio::types::LogEntry]) {
 
 #[cfg(feature = "desktop")]
 fn launch_ui() {
-    terio::ui::app::run();
+    let log_dir = match JsonlLogWriter::default_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("terio: не удалось определить директорию лога: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let store = LogStore::new(
+        Box::new(JsonlLogWriter::new(&log_dir).unwrap_or_else(|e| {
+            eprintln!("terio: не удалось открыть лог: {e}");
+            std::process::exit(1);
+        })),
+        Box::new(JsonlLogReader::new(&log_dir)),
+        256,
+    );
+
+    let entries = store.recent(50).unwrap_or_default();
+    terio::ui::app::run_with_entries(entries);
 }
 
 #[cfg(not(feature = "desktop"))]

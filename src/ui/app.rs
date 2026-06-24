@@ -1,10 +1,49 @@
-use dioxus::prelude::*;
+// Dioxus webview UI — primary interface for terio.
+// Receives log entries from main via OnceLock (no filesystem access).
 
+use crate::types::LogEntry;
+use dioxus::prelude::*;
+use std::sync::OnceLock;
+
+static ENTRIES: OnceLock<Vec<LogEntry>> = OnceLock::new();
+
+/// Запускает Dioxus-окно с переданными записями лога.
+pub fn run_with_entries(entries: Vec<LogEntry>) {
+    ENTRIES.set(entries).ok();
+    dioxus::launch(app);
+}
+
+/// Старый API без аргументов (для обратной совместимости, не используется).
 pub fn run() {
-    dioxus::desktop::launch(app);
+    run_with_entries(vec![]);
 }
 
 fn app() -> Element {
+    let entries = ENTRIES.get().map(|e| e.as_slice()).unwrap_or(&[]);
+
+    let log_content: Element = if entries.is_empty() {
+        rsx! { span { "(лог пуст)" } }
+    } else {
+        let rendered: String = entries
+            .iter()
+            .map(|entry| {
+                let ts = &entry.ts[..19];
+                let status = entry
+                    .status
+                    .as_ref()
+                    .map(|s| format!("{:?}", s))
+                    .unwrap_or_default();
+                let desc = entry
+                    .command
+                    .as_ref()
+                    .map(|c| &c.display[..std::cmp::min(80, c.display.len())])
+                    .unwrap_or("—");
+                format!("  {ts} [{status}] {desc}\n")
+            })
+            .collect();
+        rsx! { pre { "{rendered}" } }
+    };
+
     rsx! {
         div {
             style: "
@@ -34,20 +73,16 @@ fn app() -> Element {
                     font-size: 14px;
                     white-space: pre-wrap;
                 ",
-                "Добро пожаловать в terio.\n\nВведите запрос или команду.\n\n> "
+                {log_content}
             }
-            input {
+            div {
                 style: "
-                    width: 100%;
-                    background: #2d2d2d;
-                    border: 1px solid #333;
-                    color: #d4d4d4;
-                    padding: 8px;
-                    font-family: 'Courier New', monospace;
-                    font-size: 14px;
-                    outline: none;
+                    font-size: 12px;
+                    color: #888;
+                    padding: 4px 0;
+                    border-top: 1px solid #333;
                 ",
-                placeholder: "Введите команду (terio run -- ...) или запрос..."
+                "Всего записей: {entries.len()}"
             }
         }
     }

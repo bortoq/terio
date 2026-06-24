@@ -4,19 +4,15 @@ use crate::log::LogReader;
 use crate::types::LogEntry;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tokio::sync::broadcast;
 
 pub struct JsonlLogReader {
     dir: PathBuf,
-    broadcaster: broadcast::Sender<LogEntry>,
 }
 
 impl JsonlLogReader {
     pub fn new(dir: &Path) -> Self {
-        let (tx, _) = broadcast::channel(256);
         Self {
             dir: dir.to_path_buf(),
-            broadcaster: tx,
         }
     }
 
@@ -135,10 +131,6 @@ impl LogReader for JsonlLogReader {
             }
         }
         Ok(entries)
-    }
-
-    fn stream(&self) -> broadcast::Receiver<LogEntry> {
-        self.broadcaster.subscribe()
     }
 }
 

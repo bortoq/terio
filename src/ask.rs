@@ -17,12 +17,14 @@ pub enum AskResult {
         entry: crate::cache::CacheEntry,
         results: Vec<CommandResult>,
         total_duration: std::time::Duration,
+        all_exit_zero: bool,
     },
-    /// Cache miss: mock agent → execute → save.
+    /// Cache miss: mock agent → execute (save only if all exit 0).
     FromAgent {
-        entry: crate::cache::CacheEntry,
+        entry: Option<crate::cache::CacheEntry>,
         results: Vec<CommandResult>,
         total_duration: std::time::Duration,
+        all_exit_zero: bool,
     },
     /// Неизвестный запрос (нет mock).
     Unknown,
@@ -47,9 +49,11 @@ pub fn process_request(
             results.push(result);
         }
 
-        // Логируем script_run
+        let all_exit_zero = results.iter().all(|r| r.exit_code == 0);
         let interaction_id = Identity::new_interaction_id();
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+
+        // Логируем script_run (всегда, но с правильным статусом)
         log_script_run(
             identity,
             &interaction_id,
@@ -61,13 +65,16 @@ pub fn process_request(
             log_store,
         )?;
 
-        // Увеличиваем success_count
-        cache.increment_success(&entry.request_hash)?;
+        // Увеличиваем success_count только если все команды успешны
+        if all_exit_zero {
+            cache.increment_success(&entry.request_hash)?;
+        }
 
         return Ok(AskResult::CacheHit {
             entry,
             results,
             total_duration,
+            all_exit_zero,
         });
     }
 
@@ -83,15 +90,21 @@ pub fn process_request(
     // 3. Выполняем команды
     let mut results = Vec::new();
     let mut total_duration = std::time::Duration::default();
+    let mut all_exit_zero = true;
 
     for cmd in &plan.commands {
         let result = run::execute(&cmd.argv)?;
+        all_exit_zero = all_exit_zero && (result.exit_code == 0);
         total_duration += result.duration;
         results.push(result);
     }
 
-    // 4. Сохраняем в кеш
-    let entry = cache.save(request, plan.risk.clone(), steps)?;
+    // 4. Сохраняем в кеш только если все команды успешны
+    let entry = if all_exit_zero {
+        Some(cache.save(request, plan.risk.clone(), steps)?)
+    } else {
+        None
+    };
 
     // 5. Логируем agent_turn + command_run
     let interaction_id = Identity::new_interaction_id();
@@ -116,6 +129,7 @@ pub fn process_request(
         entry,
         results,
         total_duration,
+        all_exit_zero,
     })
 }
 
@@ -198,6 +212,8 @@ fn log_script_run(
     total_duration: std::time::Duration,
     store: &LogStore,
 ) -> Result<()> {
+    let all_exit_zero = results.iter().all(|r| r.exit_code == 0);
+
     let steps: Vec<StepInfo> = results
         .iter()
         .zip(cache_entry.steps.iter())
@@ -212,6 +228,25 @@ fn log_script_run(
         .iter()
         .map(|r| r.stdout.len() as u64 + r.stderr.len() as u64)
         .sum();
+
+    let success_before = cache_entry.success_count as u64;
+    let success_after = if all_exit_zero {
+        success_before + 1
+    } else {
+        success_before
+    };
+
+    let status = if all_exit_zero {
+        LogStatus::Success
+    } else {
+        LogStatus::Failed
+    };
+
+    let failure_kind = if all_exit_zero {
+        None
+    } else {
+        Some("command_exit".to_string())
+    };
 
     let entry = LogEntry {
         schema_version: 1,
@@ -238,8 +273,8 @@ fn log_script_run(
         request: Some(redact(request)),
         cwd: Some(redact(cwd)),
         risk: Some(cache_entry.risk.clone()),
-        status: Some(LogStatus::Success),
-        failure_kind: None,
+        status: Some(status),
+        failure_kind,
         prompt_summary: None,
         plan: None,
         model_provider: None,
@@ -254,8 +289,8 @@ fn log_script_run(
         cache_hit: Some(true),
         model_called: Some(false),
         tokens_saved_estimate: Some(50), // estimate for mock agent
-        success_count_before: Some((cache_entry.success_count - 1) as u64),
-        success_count_after: Some(cache_entry.success_count as u64),
+        success_count_before: Some(success_before),
+        success_count_after: Some(success_after),
         steps: Some(steps),
         description: None,
     };
@@ -265,7 +300,7 @@ fn log_script_run(
 
 /// Возвращает statistics на основе записей лога.
 pub fn compute_stats(reader: &dyn LogReader) -> Result<Stats> {
-    let entries = reader.recent(1000)?;
+    let entries = reader.recent(usize::MAX)?;
     let mut stats = Stats::default();
 
     for entry in &entries {
@@ -303,6 +338,7 @@ pub struct Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::{CacheEntry, CachedStep};
     use crate::log::reader::JsonlLogReader;
     use crate::log::writer::JsonlLogWriter;
     use crate::log::LogWriter;
@@ -364,5 +400,159 @@ mod tests {
         assert_eq!(stats.model_calls, 1);
         assert_eq!(stats.cache_hits, 1);
         assert_eq!(stats.total_tokens, 100);
+    }
+
+    /// log_script_run должен писать статус Failed + failure_kind при non-zero exit.
+    #[test]
+    fn test_log_script_run_failed_command() {
+        let dir = TempDir::new().unwrap();
+        let writer = Box::new(JsonlLogWriter::new(dir.path()).unwrap());
+        let reader = Box::new(JsonlLogReader::new(dir.path()));
+        let store = LogStore::new(writer, reader, 16);
+
+        let identity = Identity::load_or_create().unwrap();
+
+        let cache_entry = CacheEntry {
+            schema_version: 1,
+            script_id: "s1".to_string(),
+            request_hash: "h1".to_string(),
+            version: 1,
+            normalized_request: "test".to_string(),
+            match_policy: "exact_normalized".to_string(),
+            scope: crate::cache::ScriptScope {
+                cwd_policy: "same_cwd_only".to_string(),
+                cwd: "/tmp".to_string(),
+            },
+            risk: RiskLevel::ReadOnly,
+            parameters: serde_json::json!({}),
+            preconditions: vec![],
+            steps: vec![CachedStep {
+                command: "sh".to_string(),
+                argv: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
+                risk: RiskLevel::ReadOnly,
+            }],
+            artifacts: vec![],
+            success_count: 5,
+            trust_threshold: 3,
+            created_at: "now".to_string(),
+            last_used_at: "now".to_string(),
+        };
+
+        let results = vec![CommandResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "error".to_string(),
+            duration: std::time::Duration::from_millis(1),
+        }];
+
+        log_script_run(
+            &identity,
+            "int1",
+            "test",
+            "/tmp",
+            &cache_entry,
+            &results,
+            std::time::Duration::from_millis(1),
+            &store,
+        )
+        .unwrap();
+
+        let recent = store.recent(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].status, Some(LogStatus::Failed));
+        assert_eq!(recent[0].failure_kind, Some("command_exit".to_string()));
+        // success_count_after не увеличился
+        assert_eq!(recent[0].success_count_before, Some(5));
+        assert_eq!(recent[0].success_count_after, Some(5));
+    }
+
+    /// log_script_run должен писать статус Success при всех нулевых exit.
+    #[test]
+    fn test_log_script_run_success() {
+        let dir = TempDir::new().unwrap();
+        let writer = Box::new(JsonlLogWriter::new(dir.path()).unwrap());
+        let reader = Box::new(JsonlLogReader::new(dir.path()));
+        let store = LogStore::new(writer, reader, 16);
+
+        let identity = Identity::load_or_create().unwrap();
+
+        let cache_entry = CacheEntry {
+            schema_version: 1,
+            script_id: "s1".to_string(),
+            request_hash: "h1".to_string(),
+            version: 1,
+            normalized_request: "test".to_string(),
+            match_policy: "exact_normalized".to_string(),
+            scope: crate::cache::ScriptScope {
+                cwd_policy: "same_cwd_only".to_string(),
+                cwd: "/tmp".to_string(),
+            },
+            risk: RiskLevel::ReadOnly,
+            parameters: serde_json::json!({}),
+            preconditions: vec![],
+            steps: vec![CachedStep {
+                command: "echo".to_string(),
+                argv: vec!["echo".to_string(), "ok".to_string()],
+                risk: RiskLevel::ReadOnly,
+            }],
+            artifacts: vec![],
+            success_count: 5,
+            trust_threshold: 3,
+            created_at: "now".to_string(),
+            last_used_at: "now".to_string(),
+        };
+
+        let results = vec![CommandResult {
+            exit_code: 0,
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            duration: std::time::Duration::from_millis(1),
+        }];
+
+        log_script_run(
+            &identity,
+            "int1",
+            "test",
+            "/tmp",
+            &cache_entry,
+            &results,
+            std::time::Duration::from_millis(1),
+            &store,
+        )
+        .unwrap();
+
+        let recent = store.recent(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].status, Some(LogStatus::Success));
+        assert_eq!(recent[0].failure_kind, None);
+        // success_count_after увеличился на 1
+        assert_eq!(recent[0].success_count_before, Some(5));
+        assert_eq!(recent[0].success_count_after, Some(6));
+    }
+
+    /// create directory больше не в mock — проверяем что нет LocalWrite мока
+    #[test]
+    fn test_mock_no_write_commands() {
+        let plan = get_mock_plan("create directory");
+        assert!(
+            plan.is_none(),
+            "create directory должен быть удалён из mock"
+        );
+        // Все остальные моки — ReadOnly
+        for req in &[
+            "list files",
+            "current directory",
+            "who am i",
+            "date and time",
+            "disk usage",
+        ] {
+            let plan = get_mock_plan(req);
+            assert!(plan.is_some(), "mock должен знать: {req}");
+            assert_eq!(
+                plan.unwrap().risk,
+                RiskLevel::ReadOnly,
+                "{req} должен быть ReadOnly"
+            );
+        }
     }
 }

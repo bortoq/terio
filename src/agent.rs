@@ -89,23 +89,6 @@ fn mock_responses() -> Vec<(&'static str, AgentPlan)> {
                 }],
             },
         ),
-        (
-            "create directory",
-            AgentPlan {
-                summary: "Create a new directory".to_string(),
-                risk: RiskLevel::LocalWrite,
-                commands: vec![AgentCommand {
-                    command: "mkdir".to_string(),
-                    argv: vec![
-                        "mkdir".to_string(),
-                        "-p".to_string(),
-                        "./new_dir".to_string(),
-                    ],
-                    risk: RiskLevel::LocalWrite,
-                    reason: "Creates a directory with parent flag".to_string(),
-                }],
-            },
-        ),
     ]
 }
 

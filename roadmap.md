@@ -21,32 +21,34 @@
 **Принцип:** terio — оконное приложение с первого коммита. Dioxus webview — основной UI. CLI (`terio run --`) — дополнительный интерфейс для автоматизации и отладки.
 
 - [x] Cargo.toml, src/main.rs, src/cli.rs, src/ui/app.rs, src/run.rs.
-- [ ] Dioxus webview: окно с полем ввода и областью вывода (scaffold есть, требуется feature desktop).
+- [x] Dioxus webview: окно с полем ввода и областью вывода (требуется `feature desktop`)
 - [x] `terio run -- <command>` — shell без модели.
 - [x] Захват stdout, stderr, exit code, duration.
 - [x] **Identity:** instance_id (ULID) генерируется при первом запуске; session_id (UUID) на каждый запуск.
 - [x] **LogWriter trait + JsonlLogWriter:** append (validate → write → broadcast).
-- [x] **LogReader trait + JsonlLogReader:** stream(), recent(n), by_session(), by_interaction().
+- [x] **LogReader trait + JsonlLogReader:** recent(n), by_session(), by_interaction().
 - [x] **LogStore:** writer + reader + broadcaster.
 - [x] **Accounting:** cost_counters required+nested в каждой записи; aggregate; заглушка compute_attention_cost.
 - [x] **display_profile:** required nested поля (type, renderer_hint, user_visible).
-- [ ] Renderer подписан на LogEventStream. Dioxus показывает лог (plain text) — требуется desktop feature.
+- [x] Dioxus показывает лог (plain text) через `LogStore::recent(50)` при запуске. Live-stream — Phase 6+.
 - [x] `terio log --json` — история в JSON.
 - [x] CI: cargo test + cargo build.
 
-**Критерий:** `cargo run` открывает Dioxus-окно. `terio run -- ls -l` → запись в логе, отображается в окне. `terio log --json` показывает cost_counters и display_profile.
+**Критерий:** `cargo run` открывает Dioxus-окно с логом. `terio run -- ls -l` → запись в логе, отображается в окне при следующем запуске или через Refresh. `terio log --json` показывает cost_counters и display_profile.
 
 ## 2. Mock agent + кеш (без реальной модели)
 
-- [ ] `terio ask "list files"` — mock: если request совпадает, вернуть `ls -l`.
-- [ ] Script Cache: первый ask → сохранить chain.
-- [ ] Request Matcher: exact normalized match.
-- [ ] Повторный `terio ask "list files"` — cache hit, без mock.
-- [ ] `terio stats` — model_calls, cache_hits, cost_counters.
+- [x] `terio ask "list files"` — mock: 6 запросов, hardcoded планы.
+- [x] Script Cache: первый ask → сохранить chain (JSON в `~/.terio/cache/`).
+- [x] Request Matcher: exact normalized match (lowercase+trim+collapse + SHA-256).
+- [x] Повторный `terio ask "list files"` — cache hit, без mock.
+- [x] `terio stats` — model_calls, cache_hits, cost_counters.
 - [ ] Table renderer в Dioxus.
-- [ ] Группировка по interaction_id в логе.
+- [x] Redact: Bearer, api_key, token, SSH ключи, URL credentials.
+- [x] Risk classifier: git clean/reset/ push, curl -X POST, docker rm/rmi, cat .ssh и т.д.
+- [x] Группировка по interaction_id в логе (поле есть, группировка через `by_interaction`).
 
-**Критерий:** `terio ask "list files"` (первый) → mock, таблица. Повторный → cache hit, быстрее. `terio stats` показывает cache_hits > 0.
+**Критерий:** `terio ask "list files"` (первый) → mock, output. Повторный → cache hit, быстрее. `terio stats` показывает cache_hits > 0.
 
 ## 3. Реальный LLM provider
 
@@ -54,7 +56,7 @@
 - [ ] Agent возвращает structured plan (command + argv).
 - [ ] cache_template с steps от модели → terio сохраняет.
 - [ ] План → подтверждение → выполнение.
-- [ ] Script Cache: scope.cwd_policy.
+- [x] Script Cache: scope.cwd_policy (scope + cwd сохранены в CacheEntry, валидация — Phase 4).
 - [ ] Risk: destructive/network_write → всегда подтверждение.
 - [ ] Redaction secrets до отправки в модель.
 - [ ] `terio cancel`.
@@ -63,12 +65,12 @@
 
 ## 4. Trust + безопасность
 
-- [ ] Risk taxonomy во всех компонентах.
-- [ ] Redaction до модели и до лога.
+- [x] Risk taxonomy в run-компоненте (8 уровней).
+- [x] Redaction до лога (LogStore::append). Redaction до модели — Phase 3.
 - [ ] Policy: always_ask / ask_once / allow.
 - [ ] Auto-run: exact match + risk <= local_write + N успехов + scope соблюдён.
 - [ ] Fuzzy match: никогда auto-run, только с подтверждением.
-- [ ] Agent risk — рекомендательный. terio вычисляет финальный.
+- [x] Agent risk — рекомендательный. terio вычисляет финальный через compute_risk().
 - [ ] Path boundary validation (защита от ../../).
 - [ ] `terio config`.
 

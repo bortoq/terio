@@ -15,6 +15,13 @@ pub struct CachedStep {
     pub risk: RiskLevel,
 }
 
+/// Scope выполнения скрипта (соответствует schema).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptScope {
+    pub cwd_policy: String,
+    pub cwd: String,
+}
+
 /// Запись в кеше скриптов.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheEntry {
@@ -24,6 +31,7 @@ pub struct CacheEntry {
     pub version: u32,
     pub normalized_request: String,
     pub match_policy: String,
+    pub scope: ScriptScope,
     pub risk: RiskLevel,
     pub parameters: serde_json::Value,
     pub preconditions: Vec<serde_json::Value>,
@@ -87,6 +95,9 @@ impl ScriptCache {
 
         let now = iso_now();
         let script_id = hash.clone(); // в MVP script_id = hash содержимого
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
 
         let entry = CacheEntry {
             schema_version: 1,
@@ -95,6 +106,10 @@ impl ScriptCache {
             version: 1,
             normalized_request: normalized,
             match_policy: "exact_normalized".to_string(),
+            scope: ScriptScope {
+                cwd_policy: "same_cwd_only".to_string(),
+                cwd,
+            },
             risk,
             parameters: serde_json::json!({}),
             preconditions: vec![],
@@ -243,6 +258,10 @@ mod tests {
             version: 1,
             normalized_request: "test".to_string(),
             match_policy: "exact_normalized".to_string(),
+            scope: ScriptScope {
+                cwd_policy: "same_cwd_only".to_string(),
+                cwd: "/tmp".to_string(),
+            },
             risk: RiskLevel::ReadOnly,
             parameters: serde_json::json!({}),
             preconditions: vec![],
