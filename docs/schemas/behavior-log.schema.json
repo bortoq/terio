@@ -113,7 +113,7 @@
       }
     },
     "request": { "type": "string", "description": "Текст запроса" },
-    "parent_interaction_id": { "type": "string", "description": "interaction_id родительского запроса (если один запрос породил другой)" },
+    "parent_interaction_id": { "type": "string", "format": "uuid", "description": "interaction_id родительского запроса (если один запрос породил другой)" },
     "cwd": { "type": "string", "description": "Рабочая директория" },
     "risk": { "type": "string", "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"] },
     "status": { "type": "string", "enum": ["success", "failed", "cancelled"] },
