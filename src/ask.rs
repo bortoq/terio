@@ -1,9 +1,11 @@
-// Ask flow: matcher → cache → agent → execute → cache
+// Ask flow: cache → provider → confirm → execute → cache
 
-use crate::agent::{get_mock_plan, plan_to_steps};
+use crate::agent::{plan_to_steps, AgentPlan};
 use crate::cache::ScriptCache;
+use crate::config::Config;
 use crate::identity::Identity;
 use crate::log::{LogReader, LogStore};
+use crate::provider::{needs_confirmation, Provider};
 use crate::redact::redact;
 use crate::run::{self, CommandResult};
 use crate::types::*;
@@ -19,23 +21,28 @@ pub enum AskResult {
         total_duration: std::time::Duration,
         all_exit_zero: bool,
     },
-    /// Cache miss: mock agent → execute (save only if all exit 0).
+    /// Cache miss: provider generated plan, commands executed.
     FromAgent {
         entry: Option<crate::cache::CacheEntry>,
         results: Vec<CommandResult>,
         total_duration: std::time::Duration,
         all_exit_zero: bool,
+        plan: AgentPlan,
     },
-    /// Неизвестный запрос (нет mock).
+    /// Provider not available (no mock match, no real provider configured).
     Unknown,
+    /// User declined confirmation.
+    Declined,
 }
 
-/// Обрабатывает запрос: exact cache → miss → mock agent.
+/// Обрабатывает запрос: cache → provider → confirm → execute → save.
 pub fn process_request(
     request: &str,
     identity: &Identity,
     log_store: &LogStore,
     cache: &ScriptCache,
+    provider: &dyn Provider,
+    skip_confirm: bool,
 ) -> Result<AskResult> {
     // 1. Поиск в кеше
     if let Some(entry) = cache.lookup(request)? {
@@ -53,7 +60,6 @@ pub fn process_request(
         let interaction_id = Identity::new_interaction_id();
         let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
-        // Логируем script_run (всегда, но с правильным статусом)
         log_script_run(
             identity,
             &interaction_id,
@@ -65,7 +71,6 @@ pub fn process_request(
             log_store,
         )?;
 
-        // Увеличиваем success_count только если все команды успешны
         if all_exit_zero {
             cache.increment_success(&entry.request_hash)?;
         }
@@ -78,16 +83,38 @@ pub fn process_request(
         });
     }
 
-    // 2. Кеш промах — пробуем mock agent
-    let plan = get_mock_plan(request);
-    let plan = match plan {
-        Some(p) => p,
-        None => return Ok(AskResult::Unknown),
+    // 2. Кеш промах — используем provider
+    let plan = match provider.plan(request) {
+        Ok(p) => p,
+        Err(_) => return Ok(AskResult::Unknown),
     };
+
+    // 3. Запрашиваем подтверждение если нужно
+    if !skip_confirm && needs_confirmation(&plan) {
+        eprintln!("⚠️  План требует подтверждения (risk: {:?})", plan.risk);
+        eprintln!("   {}", plan.summary);
+        for cmd in &plan.commands {
+            eprintln!(
+                "   > {} (risk: {:?}): {}",
+                cmd.argv.join(" "),
+                cmd.risk,
+                cmd.reason
+            );
+        }
+        eprint!("Подтвердить? [y/N] ");
+        use std::io::Write;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            return Ok(AskResult::Declined);
+        }
+    }
 
     let steps = plan_to_steps(&plan);
 
-    // 3. Выполняем команды
+    // 4. Выполняем команды
     let mut results = Vec::new();
     let mut total_duration = std::time::Duration::default();
     let mut all_exit_zero = true;
@@ -99,14 +126,14 @@ pub fn process_request(
         results.push(result);
     }
 
-    // 4. Сохраняем в кеш только если все команды успешны
+    // 5. Сохраняем в кеш только если все команды успешны
     let entry = if all_exit_zero {
         Some(cache.save(request, plan.risk.clone(), steps)?)
     } else {
         None
     };
 
-    // 5. Логируем agent_turn + command_run
+    // 6. Логируем agent_turn + command_run
     let interaction_id = Identity::new_interaction_id();
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
@@ -130,6 +157,7 @@ pub fn process_request(
         results,
         total_duration,
         all_exit_zero,
+        plan,
     })
 }
 
@@ -138,9 +166,12 @@ fn log_agent_turn(
     interaction_id: &str,
     request: &str,
     cwd: &str,
-    plan: &crate::agent::AgentPlan,
+    plan: &AgentPlan,
     store: &LogStore,
 ) -> Result<()> {
+    let config = Config::load().unwrap_or_default();
+    let provider_name = format!("{:?}", config.provider.provider_type).to_lowercase();
+
     let entry = LogEntry {
         schema_version: 1,
         instance_id: identity.instance_id.clone(),
@@ -156,10 +187,10 @@ fn log_agent_turn(
         risk: Some(plan.risk.clone()),
         status: Some(LogStatus::Success),
         failure_kind: None,
-        prompt_summary: Some(format!("mock: {}", redact(request))),
+        prompt_summary: Some(format!("{}: {}", provider_name, redact(request))),
         plan: Some(serde_json::to_value(&plan.commands).unwrap_or_default()),
-        model_provider: Some("mock".to_string()),
-        model_name: Some("mock-agent-v1".to_string()),
+        model_provider: Some(provider_name),
+        model_name: Some(config.provider.model.clone().unwrap_or_default()),
         duration_ms: Some(0),
         tokens_used: Some(0),
         command: None,
@@ -288,7 +319,7 @@ fn log_script_run(
         script_id: Some(cache_entry.script_id.clone()),
         cache_hit: Some(true),
         model_called: Some(false),
-        tokens_saved_estimate: Some(50), // estimate for mock agent
+        tokens_saved_estimate: Some(50),
         success_count_before: Some(success_before),
         success_count_after: Some(success_after),
         steps: Some(steps),
@@ -311,9 +342,7 @@ pub fn compute_stats(reader: &dyn LogReader) -> Result<Stats> {
             LogKind::ScriptRun => {
                 stats.cache_hits += 1;
             }
-            LogKind::CommandRun => {
-                // считаем executed commands
-            }
+            LogKind::CommandRun => {}
             _ => {}
         }
 
@@ -358,7 +387,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let writer = JsonlLogWriter::new(dir.path()).unwrap();
 
-        // agent_turn — используем command_run как базу, меняем kind
         let mut entry = LogEntry::new_command_run(
             "i1",
             "s1",
@@ -376,7 +404,6 @@ mod tests {
         entry.cost_counters.llm_cost.tokens = 100;
         writer.append(entry).unwrap();
 
-        // script_run
         let mut entry = LogEntry::new_command_run(
             "i1",
             "s1",
@@ -402,14 +429,12 @@ mod tests {
         assert_eq!(stats.total_tokens, 100);
     }
 
-    /// log_script_run должен писать статус Failed + failure_kind при non-zero exit.
     #[test]
     fn test_log_script_run_failed_command() {
         let dir = TempDir::new().unwrap();
         let writer = Box::new(JsonlLogWriter::new(dir.path()).unwrap());
         let reader = Box::new(JsonlLogReader::new(dir.path()));
         let store = LogStore::new(writer, reader, 16);
-
         let identity = Identity::load_or_create().unwrap();
 
         let cache_entry = CacheEntry {
@@ -461,19 +486,16 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].status, Some(LogStatus::Failed));
         assert_eq!(recent[0].failure_kind, Some("command_exit".to_string()));
-        // success_count_after не увеличился
         assert_eq!(recent[0].success_count_before, Some(5));
         assert_eq!(recent[0].success_count_after, Some(5));
     }
 
-    /// log_script_run должен писать статус Success при всех нулевых exit.
     #[test]
     fn test_log_script_run_success() {
         let dir = TempDir::new().unwrap();
         let writer = Box::new(JsonlLogWriter::new(dir.path()).unwrap());
         let reader = Box::new(JsonlLogReader::new(dir.path()));
         let store = LogStore::new(writer, reader, 16);
-
         let identity = Identity::load_or_create().unwrap();
 
         let cache_entry = CacheEntry {
@@ -525,34 +547,7 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].status, Some(LogStatus::Success));
         assert_eq!(recent[0].failure_kind, None);
-        // success_count_after увеличился на 1
         assert_eq!(recent[0].success_count_before, Some(5));
         assert_eq!(recent[0].success_count_after, Some(6));
-    }
-
-    /// create directory больше не в mock — проверяем что нет LocalWrite мока
-    #[test]
-    fn test_mock_no_write_commands() {
-        let plan = get_mock_plan("create directory");
-        assert!(
-            plan.is_none(),
-            "create directory должен быть удалён из mock"
-        );
-        // Все остальные моки — ReadOnly
-        for req in &[
-            "list files",
-            "current directory",
-            "who am i",
-            "date and time",
-            "disk usage",
-        ] {
-            let plan = get_mock_plan(req);
-            assert!(plan.is_some(), "mock должен знать: {req}");
-            assert_eq!(
-                plan.unwrap().risk,
-                RiskLevel::ReadOnly,
-                "{req} должен быть ReadOnly"
-            );
-        }
     }
 }

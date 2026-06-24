@@ -3,14 +3,19 @@
 use clap::Parser;
 use terio::ask::{self, AskResult};
 use terio::cache::ScriptCache;
-use terio::cli::{Cli, Command};
+use terio::cli::{Cli, Command, ConfigCmd};
+use terio::config::Config;
 use terio::identity::Identity;
 use terio::log::reader::JsonlLogReader;
 use terio::log::writer::JsonlLogWriter;
 use terio::log::{LogReader, LogStore};
+use terio::provider::create_provider;
 use terio::run;
 
 fn main() -> anyhow::Result<()> {
+    // Signal handler для Ctrl+C — ДО任何 другой инициализации
+    run::setup_ctrlc_handler();
+
     let cli = Cli::parse();
     let identity = Identity::load_or_create()?;
     let log_dir = JsonlLogWriter::default_dir()?;
@@ -24,8 +29,8 @@ fn main() -> anyhow::Result<()> {
             handle_run(&identity, &log_dir, &command)?;
         }
 
-        Some(Command::Ask { request }) => {
-            handle_ask(&identity, &log_dir, &request)?;
+        Some(Command::Ask { request, yes }) => {
+            handle_ask(&identity, &log_dir, &request, yes)?;
         }
 
         Some(Command::Log { json }) => {
@@ -51,11 +56,25 @@ fn main() -> anyhow::Result<()> {
         }
 
         Some(Command::Cancel) => {
-            eprintln!("terio cancel — отмена. Реализация в Phase 3.");
+            if run::cancel_current() {
+                eprintln!("terio: запрос отмены отправлен.");
+            } else {
+                eprintln!("terio: нет активного процесса для отмены.");
+            }
         }
 
-        Some(Command::Config) => {
-            eprintln!("terio config — настройки. Реализация в Phase 4.");
+        Some(Command::Config(cmd)) => {
+            let mut config = Config::load().unwrap_or_default();
+            match cmd {
+                ConfigCmd::Show => {
+                    config.print();
+                }
+                ConfigCmd::Set { key, value } => {
+                    config.set(&key, &value)?;
+                    config.save()?;
+                    eprintln!("terio: config {key} установлен.");
+                }
+            }
         }
     }
 
@@ -72,7 +91,7 @@ fn handle_run(
         std::process::exit(1);
     }
 
-    // Предупреждение для destructive/network_write
+    // Предупреждение для destructive/network_write/credential_access
     let risk = run::compute_risk(&command[0], &command[1..]);
     if risk == terio::types::RiskLevel::Destructive {
         eprintln!("⚠️  ВНИМАНИЕ: destructive команда: {}", command.join(" "));
@@ -139,13 +158,21 @@ fn handle_run(
     std::process::exit(result.exit_code);
 }
 
-fn handle_ask(identity: &Identity, log_dir: &std::path::Path, request: &str) -> anyhow::Result<()> {
+fn handle_ask(
+    identity: &Identity,
+    log_dir: &std::path::Path,
+    request: &str,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let config = Config::load().unwrap_or_default();
     let cache = ScriptCache::new()?;
     let writer = Box::new(JsonlLogWriter::new(log_dir)?);
     let reader = Box::new(JsonlLogReader::new(log_dir));
     let store = LogStore::new(writer, reader, 256);
 
-    match ask::process_request(request, identity, &store, &cache)? {
+    let provider = create_provider(&config.provider);
+
+    match ask::process_request(request, identity, &store, &cache, &*provider, yes)? {
         AskResult::CacheHit {
             entry,
             results,
@@ -173,6 +200,7 @@ fn handle_ask(identity: &Identity, log_dir: &std::path::Path, request: &str) -> 
             results,
             total_duration,
             all_exit_zero,
+            plan,
         } => {
             let cached = if entry.is_some() {
                 ", cached"
@@ -180,7 +208,7 @@ fn handle_ask(identity: &Identity, log_dir: &std::path::Path, request: &str) -> 
                 " (not cached)"
             };
             let status = if all_exit_zero { "ok" } else { "FAIL" };
-            eprintln!("[mock agent] {} [{}]{}", request, status, cached);
+            eprintln!("[agent] {} [{}]{}", plan.summary, status, cached);
             for (i, result) in results.iter().enumerate() {
                 if i > 0 {
                     println!("---");
@@ -194,7 +222,9 @@ fn handle_ask(identity: &Identity, log_dir: &std::path::Path, request: &str) -> 
         }
         AskResult::Unknown => {
             eprintln!("terio: не знаю, как ответить на \"{request}\".");
-            eprintln!("  Mock agent знает: list files, current directory, who am i, date and time, disk usage");
+        }
+        AskResult::Declined => {
+            eprintln!("terio: отменено пользователем.");
         }
     }
 

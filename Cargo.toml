@@ -31,6 +31,9 @@ thiserror = "2"
 # UI (Dioxus webview) — опционально, требует GTK3/webkit2gtk на Linux
 dioxus = { version = "0.6", features = ["desktop"], optional = true }
 
+# HTTP client (for LLM providers)
+ureq = { version = "3", features = ["json"] }
+
 # Hashing
 sha2 = "0.10"
 

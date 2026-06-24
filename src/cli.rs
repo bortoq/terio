@@ -18,6 +18,9 @@ pub enum Command {
     Ask {
         /// Текст запроса
         request: String,
+        /// Пропустить подтверждение для risk >= local_write
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Выполнить shell-команду напрямую
@@ -44,6 +47,15 @@ pub enum Command {
     /// Отменить текущую операцию
     Cancel,
 
-    /// Настройки
-    Config,
+    /// Управление настройками
+    #[command(subcommand)]
+    Config(ConfigCmd),
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCmd {
+    /// Показать текущую конфигурацию
+    Show,
+    /// Установить значение: terio config set <key> <value>
+    Set { key: String, value: String },
 }

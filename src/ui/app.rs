@@ -1,15 +1,18 @@
 // Dioxus webview UI — primary interface for terio.
-// Receives log entries from main via OnceLock (no filesystem access).
+// Receives log entries from main via static (refreshable with F5).
 
+use crate::log::LogReader;
 use crate::types::LogEntry;
 use dioxus::prelude::*;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
-static ENTRIES: OnceLock<Vec<LogEntry>> = OnceLock::new();
+static LOG_ENTRIES: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
 
 /// Запускает Dioxus-окно с переданными записями лога.
 pub fn run_with_entries(entries: Vec<LogEntry>) {
-    ENTRIES.set(entries).ok();
+    if let Ok(mut guard) = LOG_ENTRIES.lock() {
+        *guard = entries;
+    }
     dioxus::launch(app);
 }
 
@@ -90,9 +93,51 @@ fn prepare_rows(entries: &[LogEntry]) -> Vec<RowData> {
         .collect()
 }
 
+/// Безопасное усечение строки по символам (не байтам).
+fn truncate_safe(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
 fn app() -> Element {
-    let entries = ENTRIES.get().map(|e| e.as_slice()).unwrap_or(&[]);
-    let rows = prepare_rows(entries);
+    // Read current entries
+    let entries_guard = LOG_ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+    let rows = prepare_rows(&entries_guard);
+    drop(entries_guard);
+
+    let mut input_text = use_signal(String::new);
+
+    let on_submit = move |_| {
+        let val = input_text();
+        let val = val.trim().to_string();
+        if !val.is_empty() {
+            let val2 = val.clone();
+            _ = std::thread::spawn(move || {
+                _ = std::process::Command::new("terio")
+                    .arg("ask")
+                    .arg(&val2)
+                    .arg("--yes")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .and_then(|mut c| c.wait());
+            });
+        }
+        input_text.set(String::new());
+    };
+
+    let on_f5 = move |_| {
+        if let Ok(log_dir) = crate::log::writer::JsonlLogWriter::default_dir() {
+            let reader = crate::log::reader::JsonlLogReader::new(&log_dir);
+            if let Ok(fresh) = reader.recent(100) {
+                if let Ok(mut guard) = LOG_ENTRIES.lock() {
+                    *guard = fresh;
+                }
+            }
+        }
+    };
+
+    let count = rows.len();
 
     rsx! {
         div {
@@ -105,7 +150,7 @@ fn app() -> Element {
                 color: #d4d4d4;
                 font-size: 13px;
             ",
-            // Header
+            // Header + input
             div {
                 style: "
                     display: flex; align-items: center; gap: 12px;
@@ -114,7 +159,43 @@ fn app() -> Element {
                     border-bottom: 1px solid #333;
                 ",
                 div { style: "font-size: 18px; font-weight: bold; color: #569cd6;", "terio" }
-                div { style: "font-size: 12px; color: #888;", "log · {entries.len()} записей" }
+                div { style: "font-size: 12px; color: #888;", "log · {count} записей" }
+                // Input + ask button
+                div {
+                    style: "display: flex; flex: 1; margin-left: 12px;",
+                    input {
+                        style: "
+                            flex: 1;
+                            background: #3c3c3c;
+                            border: 1px solid #555;
+                            color: #d4d4d4;
+                            padding: 4px 8px;
+                            border-radius: 3px;
+                            font-size: 13px;
+                            outline: none;
+                        ",
+                        placeholder: "Введите запрос...",
+                        value: "{input_text}",
+                        oninput: move |evt: Event<FormData>| {
+                            let val = evt.value().clone();
+                            input_text.set(val);
+                        },
+                    }
+                    button {
+                        onclick: on_submit,
+                        style: "
+                            margin-left: 6px;
+                            background: #0e639c;
+                            border: none;
+                            color: white;
+                            padding: 4px 12px;
+                            border-radius: 3px;
+                            font-size: 13px;
+                            cursor: pointer;
+                        ",
+                        "Ask"
+                    }
+                }
             }
             // Table header
             div {
@@ -162,7 +243,7 @@ fn app() -> Element {
                                     text-overflow: ellipsis;
                                     white-space: nowrap;
                                 ",
-                                "{row.desc}"
+                                "{truncate_safe(&row.desc, 120)}"
                             }
                             div { style: "color: #888;", "{row.exit}" }
                             div { style: "color: #d7ba7d; font-size: 11px;", "{row.risk}" }
@@ -170,16 +251,22 @@ fn app() -> Element {
                     }
                 }
             }
-            // Footer
+            // Footer with F5 button
             div {
                 style: "
-                    font-size: 11px;
-                    color: #555;
-                    padding: 4px 12px;
-                    border-top: 1px solid #333;
-                    text-align: right;
+                    display: flex; justify-content: space-between; align-items: center;
+                    font-size: 11px; color: #555;
+                    padding: 4px 12px; border-top: 1px solid #333;
                 ",
-                "F5: обновить"
+                button {
+                    onclick: on_f5,
+                    style: "
+                        background: #3c3c3c; border: 1px solid #555;
+                        color: #d4d4d4; padding: 2px 10px;
+                        border-radius: 3px; cursor: pointer; font-size: 11px;
+                    ",
+                    "↻ Обновить (F5)"
+                }
             }
         }
     }

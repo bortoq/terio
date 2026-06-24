@@ -9,15 +9,16 @@ pub mod ask;
 pub mod cache;
 pub mod identity;
 pub mod matcher;
+pub mod provider;
 pub mod redact;
 pub mod run;
 
 #[cfg(feature = "desktop")]
 pub mod ui;
 
-// Следующие фазы (заглушки)
 pub mod config;
+pub mod log;
+
+// Следующие фазы (заглушки)
 pub mod render;
 pub mod trust;
-
-pub mod log;

@@ -4,7 +4,17 @@ use crate::types::{
     CommandInfo, CostCounters, ExecutionCost, LogEntry, LogKind, LogStatus, RiskLevel,
 };
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Instant;
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+
+/// PID текущего выполняемого дочернего процесса (0 = нет процесса).
+static CURRENT_PID: AtomicI32 = AtomicI32::new(0);
+
+/// Флаг запроса отмены.
+static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Результат выполнения команды.
 #[derive(Debug)]
@@ -16,21 +26,43 @@ pub struct CommandResult {
 }
 
 /// Выполняет shell-команду с заданными argv.
+/// Поддерживает отмену через `cancel_current()` или Ctrl+C.
 /// Безопасность: команда запускается напрямую, без shell-оболочки.
 pub fn execute(argv: &[String]) -> Result<CommandResult> {
     if argv.is_empty() {
         anyhow::bail!("empty command");
     }
 
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+
     let start = Instant::now();
-    let output = std::process::Command::new(&argv[0])
+    let child = std::process::Command::new(&argv[0])
         .args(&argv[1..])
-        .output()?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let pid = child.id() as i32;
+    CURRENT_PID.store(pid, Ordering::SeqCst);
+
+    let output = child.wait_with_output()?;
+
+    CURRENT_PID.store(0, Ordering::SeqCst);
     let duration = start.elapsed();
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
+
+    // Если процесс был убит сигналом (отмена)
+    let exit_code = if let Some(sig) = output.status.signal() {
+        if CANCEL_REQUESTED.load(Ordering::SeqCst) {
+            -1 // cancelled
+        } else {
+            -sig // negative = killed by signal
+        }
+    } else {
+        output.status.code().unwrap_or(-1)
+    };
 
     Ok(CommandResult {
         exit_code,
@@ -38,6 +70,75 @@ pub fn execute(argv: &[String]) -> Result<CommandResult> {
         stderr,
         duration,
     })
+}
+
+/// Отменить текущее выполнение (SIGTERM на Unix, taskkill на Windows).
+/// Возвращает true, если процесс был активен и отправлен сигнал.
+pub fn cancel_current() -> bool {
+    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    let pid = CURRENT_PID.load(Ordering::SeqCst);
+    if pid > 0 {
+        kill_process(pid as u32);
+        true
+    } else {
+        false
+    }
+}
+
+/// Проверить, был ли запрошен cancel (для использования из сигнального обработчика).
+pub fn is_cancel_requested() -> bool {
+    CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
+
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    unsafe {
+        // libc always linked on Unix — declare extern for raw syscall
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        kill(pid as i32, 15); // SIGTERM (pid: u32 → i32 lossless)
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process(pid: u32) {
+    let _ = std::process::Command::new("taskkill")
+        .args(&["/PID", &pid.to_string(), "/F"])
+        .output();
+}
+
+/// Установить обработчик Ctrl+C (SIGINT).
+/// Вызывается один раз при старте terio.
+pub fn setup_ctrlc_handler() {
+    #[cfg(unix)]
+    // SAFETY: сигнальный хендлер делает только signal-safe операции (atomics + kill).
+    unsafe {
+        extern "C" fn handle_sigint(_: i32) {
+            CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+            let pid = CURRENT_PID.load(Ordering::SeqCst);
+            if pid > 0 {
+                // SAFETY: signal-safe — kill не блокируется и не использует malloc
+                unsafe {
+                    extern "C" {
+                        fn kill(pid: i32, sig: i32) -> i32;
+                    }
+                    kill(pid, 15); // SIGTERM
+                }
+            }
+        }
+
+        extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+        }
+        const SIGINT: i32 = 2;
+        signal(SIGINT, handle_sigint as *const () as usize);
+    }
+    // На Windows Ctrl+C обрабатывается стандартно (терминация процесса)
+    #[cfg(not(unix))]
+    {
+        let _ = CANCEL_REQUESTED; // suppress unused warning
+    }
 }
 
 /// Создаёт LogEntry для command_run по результату выполнения.
