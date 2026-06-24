@@ -22,3 +22,10 @@ pub mod log;
 // Следующие фазы (заглушки)
 pub mod render;
 pub mod trust;
+
+#[cfg(test)]
+pub mod test_support {
+    use std::sync::{LazyLock, Mutex};
+
+    pub static ENV_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+}

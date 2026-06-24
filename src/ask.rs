@@ -8,11 +8,42 @@ use crate::log::{LogReader, LogStore};
 use crate::provider::{needs_confirmation, Provider};
 use crate::redact::redact;
 use crate::run::{self, CommandResult};
+use crate::trust::{evaluate_cache_entry, trust_level_str, validate_step_paths, TrustEvaluation};
 use crate::types::*;
 use anyhow::Result;
 use serde::Serialize;
+use std::path::PathBuf;
 
 /// Результат обработки запроса.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub enum PendingSource {
+    Cache,
+    Agent,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct PendingCommand {
+    pub argv: Vec<String>,
+    pub risk: RiskLevel,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct PendingPlanSummary {
+    pub request: String,
+    pub summary: String,
+    pub risk: RiskLevel,
+    pub requires_confirmation: bool,
+    pub trust: Option<TrustEvaluation>,
+    pub commands: Vec<PendingCommand>,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct PendingConfirmationState {
+    pub source: PendingSource,
+    pub plan_summary: PendingPlanSummary,
+}
+
 pub enum AskResult {
     /// Cache hit: выполнен из кеша.
     CacheHit {
@@ -29,6 +60,10 @@ pub enum AskResult {
         all_exit_zero: bool,
         plan: AgentPlan,
     },
+    PendingConfirmation {
+        source: PendingSource,
+        plan_summary: PendingPlanSummary,
+    },
     /// Provider not available (no mock match, no real provider configured).
     Unknown,
     /// User declined confirmation.
@@ -44,8 +79,22 @@ pub fn process_request(
     provider: &dyn Provider,
     skip_confirm: bool,
 ) -> Result<AskResult> {
+    let config = Config::load().unwrap_or_default();
+    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+
     // 1. Поиск в кеше
     if let Some(entry) = cache.lookup(request)? {
+        let evaluation = evaluate_cache_entry(&entry, &config, &cwd)?;
+        if !evaluation.path_boundary_ok {
+            return Ok(AskResult::Declined);
+        }
+        if !skip_confirm && evaluation.requires_confirmation {
+            return Ok(AskResult::PendingConfirmation {
+                source: PendingSource::Cache,
+                plan_summary: pending_summary_from_cache(request, &entry, evaluation),
+            });
+        }
+
         // Выполняем шаги из кеша
         let mut results = Vec::new();
         let mut total_duration = std::time::Duration::default();
@@ -58,7 +107,6 @@ pub fn process_request(
 
         let all_exit_zero = results.iter().all(|r| r.exit_code == 0);
         let interaction_id = Identity::new_interaction_id();
-        let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
         log_script_run(
             identity,
@@ -114,17 +162,20 @@ pub fn process_request(
 
     let steps = plan_to_steps(&plan);
 
-    // 4. Выполняем команды
-    let mut results = Vec::new();
-    let mut total_duration = std::time::Duration::default();
-    let mut all_exit_zero = true;
-
-    for cmd in &plan.commands {
-        let result = run::execute(&cmd.argv)?;
-        all_exit_zero = all_exit_zero && (result.exit_code == 0);
-        total_duration += result.duration;
-        results.push(result);
+    if validate_step_paths(&steps, &cwd).is_err() {
+        return Ok(AskResult::Declined);
     }
+
+    // 4. Выполняем команды
+    let requires_confirmation = needs_confirmation(&plan) || matches!(plan.risk, RiskLevel::LocalWrite);
+    if !skip_confirm && requires_confirmation {
+        return Ok(AskResult::PendingConfirmation {
+            source: PendingSource::Agent,
+            plan_summary: pending_summary_from_plan(request, &plan),
+        });
+    }
+
+    let (results, total_duration, all_exit_zero) = execute_plan_commands(&plan.commands)?;
 
     // 5. Сохраняем в кеш только если все команды успешны
     let entry = if all_exit_zero {
@@ -135,7 +186,6 @@ pub fn process_request(
 
     // 6. Логируем agent_turn + command_run
     let interaction_id = Identity::new_interaction_id();
-    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
     log_agent_turn(identity, &interaction_id, request, &cwd, &plan, log_store)?;
     for (i, cmd) in plan.commands.iter().enumerate() {
@@ -159,6 +209,102 @@ pub fn process_request(
         all_exit_zero,
         plan,
     })
+}
+
+fn execute_plan_commands(
+    commands: &[crate::agent::AgentCommand],
+) -> Result<(Vec<CommandResult>, std::time::Duration, bool)> {
+    let mut results = Vec::new();
+    let mut total_duration = std::time::Duration::default();
+    let mut all_exit_zero = true;
+
+    for cmd in commands {
+        let result = run::execute(&cmd.argv)?;
+        all_exit_zero = all_exit_zero && (result.exit_code == 0);
+        total_duration += result.duration;
+        results.push(result);
+    }
+
+    Ok((results, total_duration, all_exit_zero))
+}
+
+fn pending_summary_from_cache(
+    request: &str,
+    entry: &crate::cache::CacheEntry,
+    evaluation: TrustEvaluation,
+) -> PendingPlanSummary {
+    PendingPlanSummary {
+        request: request.to_string(),
+        summary: format!(
+            "Cached script · trust {} · {}",
+            trust_level_str(entry.success_count, entry.trust_threshold),
+            entry.normalized_request
+        ),
+        risk: entry.risk.clone(),
+        requires_confirmation: evaluation.requires_confirmation,
+        trust: Some(evaluation),
+        commands: entry
+            .steps
+            .iter()
+            .map(|step| PendingCommand {
+                argv: step.argv.clone(),
+                risk: step.risk.clone(),
+                reason: "cached step".to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn pending_summary_from_plan(request: &str, plan: &AgentPlan) -> PendingPlanSummary {
+    PendingPlanSummary {
+        request: request.to_string(),
+        summary: plan.summary.clone(),
+        risk: plan.risk.clone(),
+        requires_confirmation: true,
+        trust: None,
+        commands: plan
+            .commands
+            .iter()
+            .map(|cmd| PendingCommand {
+                argv: cmd.argv.clone(),
+                risk: cmd.risk.clone(),
+                reason: cmd.reason.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn pending_state_path() -> Result<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)?;
+    Ok(home.join(".terio").join("pending-plan.json"))
+}
+
+pub fn save_pending_confirmation(state: &PendingConfirmationState) -> Result<()> {
+    let path = pending_state_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(state)?)?;
+    Ok(())
+}
+
+pub fn load_pending_confirmation() -> Result<Option<PendingConfirmationState>> {
+    let path = pending_state_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    Ok(Some(serde_json::from_str(&content)?))
+}
+
+pub fn clear_pending_confirmation() -> Result<()> {
+    let path = pending_state_path()?;
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 fn log_agent_turn(
@@ -367,10 +513,13 @@ pub struct Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{AgentCommand, AgentPlan};
     use crate::cache::{CacheEntry, CachedStep};
     use crate::log::reader::JsonlLogReader;
     use crate::log::writer::JsonlLogWriter;
     use crate::log::LogWriter;
+    use crate::provider::Provider;
+    use anyhow::Result;
     use tempfile::TempDir;
 
     #[test]
@@ -549,5 +698,96 @@ mod tests {
         assert_eq!(recent[0].failure_kind, None);
         assert_eq!(recent[0].success_count_before, Some(5));
         assert_eq!(recent[0].success_count_after, Some(6));
+    }
+
+    struct FixedPlanProvider {
+        plan: AgentPlan,
+    }
+
+    impl Provider for FixedPlanProvider {
+        fn plan(&self, _request: &str) -> Result<AgentPlan> {
+            Ok(self.plan.clone())
+        }
+    }
+
+    #[test]
+    fn test_cache_hit_requires_confirmation_for_ask_once_before_threshold() -> Result<()> {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let identity = Identity::load_or_create()?;
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let writer = Box::new(JsonlLogWriter::new(&log_dir)?);
+        let reader = Box::new(JsonlLogReader::new(&log_dir));
+        let store = LogStore::new(writer, reader, 16);
+        let cache = ScriptCache::new()?;
+
+        cache.save(
+            "write note",
+            RiskLevel::LocalWrite,
+            vec![CachedStep {
+                command: "echo".into(),
+                argv: vec!["echo".into(), "hi".into()],
+                risk: RiskLevel::LocalWrite,
+            }],
+        )?;
+
+        let provider = FixedPlanProvider {
+            plan: AgentPlan {
+                summary: "unused".into(),
+                risk: RiskLevel::ReadOnly,
+                commands: vec![],
+            },
+        };
+
+        let result = process_request("write note", &identity, &store, &cache, &provider, false)?;
+        assert!(matches!(result, AskResult::PendingConfirmation { .. }));
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_agent_returns_pending_confirmation_for_local_write_plan() -> Result<()> {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let identity = Identity::load_or_create()?;
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let writer = Box::new(JsonlLogWriter::new(&log_dir)?);
+        let reader = Box::new(JsonlLogReader::new(&log_dir));
+        let store = LogStore::new(writer, reader, 16);
+        let cache = ScriptCache::new()?;
+
+        let provider = FixedPlanProvider {
+            plan: AgentPlan {
+                summary: "Write note to file".into(),
+                risk: RiskLevel::LocalWrite,
+                commands: vec![AgentCommand {
+                    command: "sh".into(),
+                    argv: vec!["sh".into(), "-c".into(), "printf hi > note.txt".into()],
+                    risk: RiskLevel::LocalWrite,
+                    reason: "Create a note".into(),
+                }],
+            },
+        };
+
+        let result = process_request("write note", &identity, &store, &cache, &provider, false)?;
+        assert!(matches!(result, AskResult::PendingConfirmation { .. }));
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        Ok(())
     }
 }

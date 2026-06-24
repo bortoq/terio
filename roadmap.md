@@ -76,13 +76,13 @@
 
 ## 4. Trust + безопасность
 
-- [ ] Policy: always_ask / ask_once / allow
-- [ ] Auto-run: exact match + risk <= local_write + N успехов + scope соблюдён
-- [ ] Fuzzy match: никогда auto-run, только подтверждение
-- [ ] Path boundary validation (защита от ../../)
-- [ ] Отображение подтверждения плана в UI (risk, команды, accept/decline)
-- [ ] Индикатор trust level для каждой команды в UI
-- [ ] Настройки в UI — окно конфигурации
+- [x] Policy: always_ask / ask_once / allow
+- [x] Auto-run: exact match + risk <= local_write + N успехов + scope соблюдён
+- [x] Fuzzy match: никогда auto-run, только подтверждение
+- [x] Path boundary validation (защита от ../../)
+- [x] Отображение подтверждения плана в UI (risk, команды, accept/decline)
+- [x] Индикатор trust level для каждой команды в UI
+- [x] Настройки в UI — окно конфигурации
 
 ---
 

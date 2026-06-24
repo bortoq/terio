@@ -179,6 +179,7 @@ fn handle_ask(
             total_duration,
             all_exit_zero,
         } => {
+            let _ = ask::clear_pending_confirmation();
             let status = if all_exit_zero { "ok" } else { "FAIL" };
             eprintln!(
                 "[cache hit] {} [{}] (risk: {:?})",
@@ -202,6 +203,7 @@ fn handle_ask(
             all_exit_zero,
             plan,
         } => {
+            let _ = ask::clear_pending_confirmation();
             let cached = if entry.is_some() {
                 ", cached"
             } else {
@@ -223,7 +225,28 @@ fn handle_ask(
         AskResult::Unknown => {
             eprintln!("terio: не знаю, как ответить на \"{request}\".");
         }
+        AskResult::PendingConfirmation {
+            source,
+            plan_summary,
+        } => {
+            let _ = ask::save_pending_confirmation(&ask::PendingConfirmationState {
+                source: source.clone(),
+                plan_summary: plan_summary.clone(),
+            });
+            eprintln!(
+                "[pending {:?}] {} (risk: {:?})",
+                source, plan_summary.summary, plan_summary.risk
+            );
+            for cmd in &plan_summary.commands {
+                eprintln!("   > {}", cmd.argv.join(" "));
+            }
+            if let Some(trust) = &plan_summary.trust {
+                eprintln!("   trust: {} [{}]", trust.trust_label, trust.reason);
+            }
+            eprintln!("terio: требуется подтверждение. Повторите с --yes для выполнения.");
+        }
         AskResult::Declined => {
+            let _ = ask::clear_pending_confirmation();
             eprintln!("terio: отменено пользователем.");
         }
     }

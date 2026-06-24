@@ -67,6 +67,8 @@ mod tests {
 
     #[test]
     fn test_identity_creates_instance_file() {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
         let dir = TempDir::new().unwrap();
         std::env::set_var("HOME", dir.path());
 
@@ -79,6 +81,12 @@ mod tests {
         assert_eq!(identity.instance_id, identity2.instance_id);
         // session_id разный
         assert_ne!(identity.session_id, identity2.session_id);
+
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[test]
