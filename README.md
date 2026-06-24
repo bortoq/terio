@@ -12,6 +12,7 @@ terio принимает естественный запрос, строит str
 - Trust layer: policy, scope/path validation, exact/fuzzy distinction, confirmation
 - Pending confirmation с exact saved execution через `terio confirm`
 - Experimental undo/redo for `terio ask` and cache-script replay with snapshot storage
+- Multi-view workspace UI over one shared event log: `Auto`, `Table`, `Timeline`, `Cards`, `Readable`, `Chat`
 - Script Cache для exact normalized replay
 - Redaction для лога, preview pending state и cache admission checks
 - `terio stats`, `terio log --json`, `terio config`, `terio cancel`, `terio undo`, `terio redo`
@@ -25,6 +26,7 @@ terio принимает естественный запрос, строит str
 - Undo/redo остаётся best-effort и off by default; direct `terio run -- ...` явно исключён из snapshot guarantees
 - `bubblewrap` sandbox experimental: при включённом `undo.mode=bubblewrap` terio пытается завернуть script execution в `bwrap`, но fallback в warn-mode допускается и логируется
 - UI работает как desktop control panel: actions запускаются non-blocking, но live-stream stdout/stderr пока нет
+- UI phase 6 uses hybrid loading: initial `recent(N)` snapshot plus live broadcast for in-process actions; external processes still require manual refresh fallback
 
 ## Текущее состояние
 

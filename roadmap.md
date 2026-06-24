@@ -100,14 +100,14 @@
 
 ## 6. Продвинутый рендеринг + интерактивность
 
-- [ ] Live-stream: LogStore broadcast → Dioxus (вместо poll)
-- [ ] Индикатор выполнения — spinner/progress для длительных операций
-- [ ] Timeline (git log style)
-- [ ] Card view (статусы, риски)
-- [ ] Readable page (лог, новости)
-- [ ] Авто-выбор renderer на основе display_profile
-- [ ] Блок → Window эволюция
-- [ ] Чат-окно: последовательность окон
+- [x] Live-stream: LogStore broadcast → Dioxus (вместо poll)
+- [x] Индикатор выполнения — spinner/progress для длительных операций
+- [x] Timeline (git log style)
+- [x] Card view (статусы, риски)
+- [x] Readable page (лог, новости)
+- [x] Авто-выбор renderer на основе display_profile
+- [x] Блок → Window эволюция
+- [x] Чат-окно: последовательность окон
 
 ---
 

@@ -11,6 +11,8 @@ use terio::log::writer::JsonlLogWriter;
 use terio::log::{LogReader, LogStore};
 use terio::provider::create_provider;
 use terio::run;
+#[cfg(feature = "desktop")]
+use terio::ui::app::UiCommand;
 use terio::undo;
 
 fn main() -> anyhow::Result<()> {
@@ -395,6 +397,8 @@ fn print_log_plain(entries: &[terio::types::LogEntry]) {
 
 #[cfg(feature = "desktop")]
 fn launch_ui() {
+    use std::sync::mpsc;
+
     let log_dir = match JsonlLogWriter::default_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -412,11 +416,123 @@ fn launch_ui() {
         256,
     );
 
+    let identity = Identity::load_or_create().unwrap_or_else(|e| {
+        eprintln!("terio: не удалось загрузить identity: {e}");
+        std::process::exit(1);
+    });
+    let live_stream = store.stream();
     let entries = store.recent(50).unwrap_or_default();
-    terio::ui::app::run_with_entries(entries);
+    let (tx, rx) = mpsc::channel::<UiCommand>();
+
+    std::thread::spawn(move || {
+        process_ui_commands(identity, store, rx);
+    });
+
+    terio::ui::app::run_with_entries_and_runtime(entries, Some(live_stream), Some(tx));
 }
 
 #[cfg(not(feature = "desktop"))]
 fn launch_ui() {
     eprintln!("terio: UI недоступен — соберите с '--features desktop' (требуются GTK3/webkit2gtk на Linux)");
+}
+
+#[cfg(feature = "desktop")]
+fn process_ui_commands(
+    identity: Identity,
+    store: LogStore,
+    rx: std::sync::mpsc::Receiver<UiCommand>,
+) {
+    for command in rx {
+        if let Err(err) = process_one_ui_command(&identity, &store, command) {
+            let _ = append_system_event(&identity, &store, &format!("ui action failed: {err}"));
+            let _ = store.flush();
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn process_one_ui_command(
+    identity: &Identity,
+    store: &LogStore,
+    command: UiCommand,
+) -> anyhow::Result<()> {
+    match command {
+        UiCommand::Ask(request) => {
+            let config = Config::load().unwrap_or_default();
+            let cache = ScriptCache::new()?;
+            let provider = create_provider(&config.provider);
+            match ask::process_request(&request, identity, store, &cache, &*provider, false)? {
+                AskResult::PendingConfirmation {
+                    plan_hash,
+                    source,
+                    plan_summary,
+                    execution,
+                } => {
+                    ask::save_pending_confirmation(
+                        &ask::PendingConfirmationState {
+                            plan_hash,
+                            source,
+                            plan_summary: plan_summary.clone(),
+                        },
+                        &execution,
+                    )?;
+                    append_system_event(
+                        identity,
+                        store,
+                        &format!("pending confirmation: {}", plan_summary.summary),
+                    )?;
+                }
+                AskResult::Unknown => {
+                    append_system_event(identity, store, &format!("unknown request: {request}"))?;
+                }
+                AskResult::Declined => {
+                    let _ = ask::clear_pending_confirmation();
+                    append_system_event(identity, store, "request declined")?;
+                }
+                AskResult::CacheHit { .. } | AskResult::FromAgent { .. } => {
+                    let _ = ask::clear_pending_confirmation();
+                }
+            }
+        }
+        UiCommand::Confirm => {
+            let cache = ScriptCache::new()?;
+            match ask::confirm_pending(identity, store, &cache)? {
+                AskResult::Unknown => {
+                    append_system_event(identity, store, "no pending confirmation")?;
+                }
+                AskResult::Declined => {
+                    append_system_event(identity, store, "pending plan declined")?;
+                }
+                _ => {
+                    let _ = ask::clear_pending_confirmation();
+                }
+            }
+        }
+        UiCommand::Undo => match undo::undo_latest()? {
+            Some(record) => {
+                append_system_event(
+                    identity,
+                    store,
+                    &format!("undo applied: {}", record.summary),
+                )?;
+            }
+            None => {
+                append_system_event(identity, store, "no undo available")?;
+            }
+        },
+        UiCommand::Redo => match undo::redo_latest()? {
+            Some(record) => {
+                append_system_event(
+                    identity,
+                    store,
+                    &format!("redo applied: {}", record.summary),
+                )?;
+            }
+            None => {
+                append_system_event(identity, store, "no redo available")?;
+            }
+        },
+    }
+    store.flush()?;
+    Ok(())
 }
