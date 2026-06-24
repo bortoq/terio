@@ -40,3 +40,4 @@ legacy/
 dist/
 build/
 *.tar.gz
+target/
