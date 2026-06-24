@@ -274,7 +274,8 @@ mod tests {
     #[test]
     fn test_config_render_for_display_includes_override_count() {
         let mut config = Config::default();
-        config.policy_overrides
+        config
+            .policy_overrides
             .insert("abc".to_string(), TrustPolicy::Allow);
         let rendered = config.render_for_display();
         assert!(rendered.contains("1 overrides"));

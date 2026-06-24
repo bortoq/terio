@@ -81,18 +81,21 @@ pub fn should_auto_run(entry: &CacheEntry, config: &Config) -> bool {
 
 /// Добавляет политику для скрипта в конфиг.
 pub fn set_policy(config: &mut Config, request_hash: &str, policy: TrustPolicy) {
-    config.policy_overrides.insert(request_hash.to_string(), policy);
+    config
+        .policy_overrides
+        .insert(request_hash.to_string(), policy);
 }
 
 /// Возвращает политику для скрипта (из переопределений или дефолт).
 pub fn get_policy<'a>(entry: &CacheEntry, config: &'a Config) -> &'a TrustPolicy {
-    config.policy_overrides.get(&entry.request_hash).unwrap_or_else(|| {
-        match entry.risk {
+    config
+        .policy_overrides
+        .get(&entry.request_hash)
+        .unwrap_or(match entry.risk {
             RiskLevel::ReadOnly => &config.default_trust_policy,
             RiskLevel::LocalWrite | RiskLevel::NetworkRead => &TrustPolicy::AskOnce,
             _ => &TrustPolicy::AlwaysAsk,
-        }
-    })
+        })
 }
 
 /// Форматирует trust level как строку для UI.
@@ -104,13 +107,19 @@ pub fn trust_level_str(success_count: u32, trust_threshold: u32) -> String {
     }
 }
 
-pub fn evaluate_cache_entry(entry: &CacheEntry, config: &Config, cwd: &str) -> Result<TrustEvaluation> {
+pub fn evaluate_cache_entry(
+    entry: &CacheEntry,
+    config: &Config,
+    cwd: &str,
+) -> Result<TrustEvaluation> {
     let match_kind = classify_match_kind(&entry.match_policy);
     let scope_ok = scope_matches(entry, cwd);
     let path_boundary_ok = validate_step_paths(&entry.steps, cwd).is_ok();
     let policy = resolve_policy(entry, config).clone();
-    let eligible_for_auto_run =
-        scope_ok && path_boundary_ok && can_auto_run(entry) && matches!(policy, TrustPolicy::Allow | TrustPolicy::AskOnce);
+    let eligible_for_auto_run = scope_ok
+        && path_boundary_ok
+        && can_auto_run(entry)
+        && matches!(policy, TrustPolicy::Allow | TrustPolicy::AskOnce);
     let requires_confirmation = !eligible_for_auto_run;
 
     let reason = if !scope_ok {
@@ -208,8 +217,8 @@ fn canonicalize_or_self(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::{CacheEntry, ScriptScope};
     use crate::cache::CachedStep;
+    use crate::cache::{CacheEntry, ScriptScope};
     use anyhow::Result;
 
     fn make_entry(

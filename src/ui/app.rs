@@ -73,14 +73,13 @@ fn prepare_rows(entries: &[LogEntry]) -> Vec<RowData> {
                 .as_ref()
                 .map(|s| format!("{:?}", s))
                 .unwrap_or_default();
-            let ts = entry.ts[..19].to_string();
+            let ts = truncate_safe(&entry.ts, 19);
             let desc = entry
                 .command
                 .as_ref()
-                .map(|c| &c.display[..std::cmp::min(120, c.display.len())])
-                .or(entry.description.as_deref())
-                .unwrap_or("—")
-                .to_string();
+                .map(|c| truncate_safe(&c.display, 120))
+                .or_else(|| entry.description.clone())
+                .unwrap_or_else(|| "—".to_string());
             let exit = entry.exit.map(|e| e.to_string()).unwrap_or_default();
             let risk = risk_label(entry);
             let trust = trust_badge(entry);
@@ -137,7 +136,8 @@ fn refresh_entries() {
 }
 
 fn run_terio_args(args: &[String]) {
-    let _ = std::process::Command::new("terio")
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("terio"));
+    let _ = std::process::Command::new(exe)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

@@ -85,7 +85,7 @@ pub fn process_request(
     // 1. Поиск в кеше
     if let Some(entry) = cache.lookup(request)? {
         let evaluation = evaluate_cache_entry(&entry, &config, &cwd)?;
-        if !evaluation.path_boundary_ok {
+        if !evaluation.scope_ok || !evaluation.path_boundary_ok {
             return Ok(AskResult::Declined);
         }
         if !skip_confirm && evaluation.requires_confirmation {
@@ -136,29 +136,7 @@ pub fn process_request(
         Ok(p) => p,
         Err(_) => return Ok(AskResult::Unknown),
     };
-
-    // 3. Запрашиваем подтверждение если нужно
-    if !skip_confirm && needs_confirmation(&plan) {
-        eprintln!("⚠️  План требует подтверждения (risk: {:?})", plan.risk);
-        eprintln!("   {}", plan.summary);
-        for cmd in &plan.commands {
-            eprintln!(
-                "   > {} (risk: {:?}): {}",
-                cmd.argv.join(" "),
-                cmd.risk,
-                cmd.reason
-            );
-        }
-        eprint!("Подтвердить? [y/N] ");
-        use std::io::Write;
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let input = input.trim().to_lowercase();
-        if input != "y" && input != "yes" {
-            return Ok(AskResult::Declined);
-        }
-    }
+    let (plan, has_unknown_commands) = recompute_plan_safety(plan);
 
     let steps = plan_to_steps(&plan);
 
@@ -166,8 +144,10 @@ pub fn process_request(
         return Ok(AskResult::Declined);
     }
 
-    // 4. Выполняем команды
-    let requires_confirmation = needs_confirmation(&plan) || matches!(plan.risk, RiskLevel::LocalWrite);
+    // 3. Подтверждение для плана от провайдера
+    let requires_confirmation = needs_confirmation(&plan)
+        || matches!(plan.risk, RiskLevel::LocalWrite)
+        || has_unknown_commands;
     if !skip_confirm && requires_confirmation {
         return Ok(AskResult::PendingConfirmation {
             source: PendingSource::Agent,
@@ -175,6 +155,7 @@ pub fn process_request(
         });
     }
 
+    // 4. Выполняем команды
     let (results, total_duration, all_exit_zero) = execute_plan_commands(&plan.commands)?;
 
     // 5. Сохраняем в кеш только если все команды успешны
@@ -274,6 +255,43 @@ fn pending_summary_from_plan(request: &str, plan: &AgentPlan) -> PendingPlanSumm
     }
 }
 
+fn recompute_plan_safety(mut plan: AgentPlan) -> (AgentPlan, bool) {
+    let mut has_unknown_commands = false;
+    let mut overall_risk = plan.risk.clone();
+
+    for cmd in &mut plan.commands {
+        if !run::is_known_command(&cmd.command) {
+            has_unknown_commands = true;
+        }
+
+        let computed = run::compute_risk(&cmd.command, &cmd.argv[1..]);
+        if risk_rank(&computed) > risk_rank(&cmd.risk) {
+            cmd.risk = computed.clone();
+        }
+        if risk_rank(&cmd.risk) > risk_rank(&overall_risk) {
+            overall_risk = cmd.risk.clone();
+        }
+    }
+
+    if risk_rank(&overall_risk) > risk_rank(&plan.risk) {
+        plan.risk = overall_risk;
+    }
+
+    (plan, has_unknown_commands)
+}
+
+fn risk_rank(risk: &RiskLevel) -> u8 {
+    match risk {
+        RiskLevel::ReadOnly => 0,
+        RiskLevel::LocalWrite => 1,
+        RiskLevel::NetworkRead => 2,
+        RiskLevel::CredentialAccess => 3,
+        RiskLevel::NetworkWrite => 4,
+        RiskLevel::Financial => 5,
+        RiskLevel::Destructive => 6,
+    }
+}
+
 fn pending_state_path() -> Result<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -286,7 +304,14 @@ pub fn save_pending_confirmation(state: &PendingConfirmationState) -> Result<()>
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, serde_json::to_string_pretty(state)?)?;
+    let mut state = state.clone();
+    state.plan_summary.request = redact(&state.plan_summary.request);
+    state.plan_summary.summary = redact(&state.plan_summary.summary);
+    for cmd in &mut state.plan_summary.commands {
+        cmd.argv = cmd.argv.iter().map(|a| redact(a)).collect();
+        cmd.reason = redact(&cmd.reason);
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&state)?)?;
     Ok(())
 }
 
@@ -783,6 +808,155 @@ mod tests {
 
         let result = process_request("write note", &identity, &store, &cache, &provider, false)?;
         assert!(matches!(result, AskResult::PendingConfirmation { .. }));
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_cache_hit_scope_mismatch_declined_even_with_yes() -> Result<()> {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let prev_cwd = std::env::current_dir()?;
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let other_cwd = dir.path().join("other");
+        std::fs::create_dir_all(&other_cwd)?;
+        std::env::set_current_dir(&other_cwd)?;
+
+        let identity = Identity::load_or_create()?;
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let writer = Box::new(JsonlLogWriter::new(&log_dir)?);
+        let reader = Box::new(JsonlLogReader::new(&log_dir));
+        let store = LogStore::new(writer, reader, 16);
+        let cache = ScriptCache::new()?;
+
+        let mut entry = cache.save(
+            "list files",
+            RiskLevel::ReadOnly,
+            vec![CachedStep {
+                command: "echo".into(),
+                argv: vec!["echo".into(), "hi".into()],
+                risk: RiskLevel::ReadOnly,
+            }],
+        )?;
+        entry.scope.cwd = dir.path().join("saved").display().to_string();
+        let path = dir
+            .path()
+            .join(".terio")
+            .join("cache")
+            .join(format!("{}.json", entry.request_hash));
+        std::fs::write(&path, serde_json::to_string_pretty(&entry)?)?;
+
+        let provider = FixedPlanProvider {
+            plan: AgentPlan {
+                summary: "unused".into(),
+                risk: RiskLevel::ReadOnly,
+                commands: vec![],
+            },
+        };
+
+        let result = process_request("list files", &identity, &store, &cache, &provider, true)?;
+        assert!(matches!(result, AskResult::Declined));
+
+        std::env::set_current_dir(prev_cwd)?;
+
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_provider_plan_risk_recomputed_to_destructive() -> Result<()> {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let identity = Identity::load_or_create()?;
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let writer = Box::new(JsonlLogWriter::new(&log_dir)?);
+        let reader = Box::new(JsonlLogReader::new(&log_dir));
+        let store = LogStore::new(writer, reader, 16);
+        let cache = ScriptCache::new()?;
+
+        let provider = FixedPlanProvider {
+            plan: AgentPlan {
+                summary: "Misclassified destructive command".into(),
+                risk: RiskLevel::ReadOnly,
+                commands: vec![AgentCommand {
+                    command: "rm".into(),
+                    argv: vec!["rm".into(), "-rf".into(), "tmp".into()],
+                    risk: RiskLevel::ReadOnly,
+                    reason: "wrong risk".into(),
+                }],
+            },
+        };
+
+        let result = process_request("clean tmp", &identity, &store, &cache, &provider, false)?;
+        match result {
+            AskResult::PendingConfirmation { plan_summary, .. } => {
+                assert_eq!(plan_summary.risk, RiskLevel::Destructive);
+                assert_eq!(plan_summary.commands[0].risk, RiskLevel::Destructive);
+            }
+            _ => panic!("expected pending confirmation"),
+        }
+
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_unknown_command_requires_confirmation() -> Result<()> {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let identity = Identity::load_or_create()?;
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let writer = Box::new(JsonlLogWriter::new(&log_dir)?);
+        let reader = Box::new(JsonlLogReader::new(&log_dir));
+        let store = LogStore::new(writer, reader, 16);
+        let cache = ScriptCache::new()?;
+
+        let provider = FixedPlanProvider {
+            plan: AgentPlan {
+                summary: "Run custom binary".into(),
+                risk: RiskLevel::ReadOnly,
+                commands: vec![AgentCommand {
+                    command: "custom-tool".into(),
+                    argv: vec!["custom-tool".into(), "--version".into()],
+                    risk: RiskLevel::ReadOnly,
+                    reason: "custom".into(),
+                }],
+            },
+        };
+
+        let result = process_request(
+            "custom version",
+            &identity,
+            &store,
+            &cache,
+            &provider,
+            false,
+        )?;
+        assert!(matches!(result, AskResult::PendingConfirmation { .. }));
+
         if let Some(prev) = prev_home {
             std::env::set_var("HOME", prev);
         } else {

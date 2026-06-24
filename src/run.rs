@@ -361,6 +361,39 @@ pub fn compute_risk(command: &str, args: &[String]) -> RiskLevel {
     RiskLevel::ReadOnly
 }
 
+/// Возвращает true для известных CLI-команд, которые terio разрешает планировать без отдельной валидации имени.
+pub fn is_known_command(command: &str) -> bool {
+    matches!(
+        command,
+        "ls" | "pwd"
+            | "whoami"
+            | "date"
+            | "df"
+            | "echo"
+            | "cat"
+            | "find"
+            | "sh"
+            | "git"
+            | "curl"
+            | "wget"
+            | "ssh"
+            | "scp"
+            | "mkdir"
+            | "cp"
+            | "touch"
+            | "chmod"
+            | "ln"
+            | "ffmpeg"
+            | "ffprobe"
+            | "docker"
+            | "rm"
+            | "mv"
+            | "dd"
+            | "sudo"
+            | "rsync"
+    )
+}
+
 /// Безопасное усечение строки по символам (не по байтам).
 pub fn truncate_safe(s: &str, max_chars: usize) -> String {
     let chars: Vec<char> = s.chars().collect();

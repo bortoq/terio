@@ -91,12 +91,40 @@ fn apply_redaction(mut entry: LogEntry) -> LogEntry {
     if let Some(ref mut s) = entry.description {
         *s = redact(s);
     }
+    if let Some(ref mut plan) = entry.plan {
+        redact_json_value(plan);
+    }
     if let Some(ref mut cmd) = entry.command {
         let display = redact(&cmd.display);
         let argv: Vec<String> = cmd.argv.iter().map(|a| redact(a)).collect();
         entry.command = Some(crate::types::CommandInfo { display, argv });
     }
+    if let Some(ref mut steps) = entry.steps {
+        for step in steps {
+            step.command = redact(&step.command);
+            step.argv = step.argv.iter().map(|a| redact(a)).collect();
+        }
+    }
     entry
+}
+
+fn redact_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) => {
+            *s = redact(s);
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_json_value(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values_mut() {
+                redact_json_value(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +155,14 @@ mod tests {
             CostCounters::default(),
         );
         entry.stdout_summary = Some("token: abc123".into());
+        entry.plan = Some(serde_json::json!([{
+            "argv": ["echo", "api_key=secret123"]
+        }]));
+        entry.steps = Some(vec![crate::types::StepInfo {
+            command: "echo".into(),
+            argv: vec!["echo".into(), "token=abc123".into()],
+            exit: 0,
+        }]);
 
         store.append(entry).unwrap();
 
@@ -136,5 +172,10 @@ mod tests {
         assert!(e.request.as_deref().unwrap().contains("[REDACTED]"));
         assert!(e.stdout_summary.as_deref().unwrap().contains("[REDACTED]"));
         assert!(!e.request.as_deref().unwrap().contains("secret123"));
+        assert!(e.plan.as_ref().unwrap().to_string().contains("[REDACTED]"));
+        assert!(e.steps.as_ref().unwrap()[0]
+            .argv
+            .join(" ")
+            .contains("[REDACTED]"));
     }
 }
