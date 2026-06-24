@@ -39,7 +39,8 @@
     },
     "display_profile": {
       "type": "object",
-      "description": "Как показывать эту запись пользователю. Если отсутствует — terio использует defaults по kind.",
+      "description": "Как показывать эту запись пользователю.",
+      "required": ["type", "renderer_hint", "user_visible"],
       "properties": {
         "type": {
           "type": "string",
@@ -64,16 +65,20 @@
     },
     "cost_counters": {
       "type": "object",
-      "description": "Сырые счётчики расходов для будущей total_attention_cost. Если отсутствует — все счётчики считаются 0.",
+      "description": "Сырые счётчики расходов для будущей total_attention_cost.",
+      "required": ["observation_cost_hint", "llm_cost", "execution_cost", "cache_cost", "storage_cost"],
       "properties": {
         "observation_cost_hint": {
           "type": "object",
+          "description": "Секунд внимания пользователя (MVP: заглушка, всегда 0.0)",
+          "required": ["user_sec"],
           "properties": {
-            "user_sec": { "type": "number", "minimum": 0, "description": "Секунд внимания пользователя (MVP: заглушка, всегда 0.0)" }
+            "user_sec": { "type": "number", "minimum": 0 }
           }
         },
         "llm_cost": {
           "type": "object",
+          "required": ["tokens", "duration_ms"],
           "properties": {
             "tokens": { "type": "integer", "minimum": 0 },
             "duration_ms": { "type": "integer", "minimum": 0 }
@@ -81,6 +86,7 @@
         },
         "execution_cost": {
           "type": "object",
+          "required": ["duration_ms", "commands_executed", "bytes_read", "bytes_written"],
           "properties": {
             "duration_ms": { "type": "integer", "minimum": 0 },
             "commands_executed": { "type": "integer", "minimum": 0 },
@@ -90,6 +96,7 @@
         },
         "cache_cost": {
           "type": "object",
+          "required": ["lookup_ms", "hit"],
           "properties": {
             "lookup_ms": { "type": "integer", "minimum": 0 },
             "hit": { "type": "boolean" }
@@ -97,6 +104,7 @@
         },
         "storage_cost": {
           "type": "object",
+          "required": ["bytes_written", "bytes_read"],
           "properties": {
             "bytes_written": { "type": "integer", "minimum": 0 },
             "bytes_read": { "type": "integer", "minimum": 0 }
@@ -105,7 +113,7 @@
       }
     },
     "request": { "type": "string", "description": "Текст запроса" },
-    "parent_interaction_id": { "type": "string", "format": "uuid", "description": "interaction_id родительского запроса (если один запрос породил другой)" },
+    "parent_interaction_id": { "type": "string", "description": "interaction_id родительского запроса (если один запрос породил другой)" },
     "cwd": { "type": "string", "description": "Рабочая директория" },
     "risk": { "type": "string", "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"] },
     "status": { "type": "string", "enum": ["success", "failed", "cancelled"] },

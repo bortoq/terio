@@ -4,10 +4,10 @@
 
 - [x] Сформулировать суть: агрегатор интерфейсов. Все программы с CLI/API — из одной точки.
 - [x] Scope расширяется лениво — от пользовательских запросов.
-- [x] Стек: Rust, CLI-first, Dioxus UI.
+- [x] Стек: Rust, Dioxus (webview), CLI-second.
 - [x] docs/mvp.md, docs/trust-model.md, docs/behavior-log.md, docs/agent-protocol.md.
 - [x] LICENSE.
-- [x] Экономическая модель: разделение стоимости внимания (user/agent/system).
+- [x] Экономическая модель: cost_counters в каждой записи лога.
 - [x] JSON Schema: agent-output, script-cache, behavior-log.
 - [x] LogWriter/LogReader traits — дизайн для смены формата.
 - [x] identity: instance_id + session_id.
@@ -18,25 +18,28 @@
 
 ## 1. Agent MVP
 
-`terio ask` + agent + script cache — ядро.
+`terio ask` + Dioxus UI + agent + script cache — ядро.
 
-### 1A: Shell execution + лог + identity + accounting
+**Принцип:** terio — оконное приложение с первого коммита. Dioxus webview — основной UI. CLI (`terio run --`) — дополнительный интерфейс.
+
+### 1A: Shell execution + лог + identity + accounting + Dioxus UI
 
 - [ ] Cargo.toml, src/main.rs, src/cli.rs, src/run.rs.
 - [ ] `terio run -- <command>` — shell без модели.
 - [ ] Захват stdout, stderr, exit code, duration.
-- [ ] `terio rerun`.
 - [ ] **Identity:** instance_id генерируется при первом запуске; session_id на каждый запуск.
-- [ ] **LogWriter trait + JsonlLogWriter:** append, in-memory broadcast channel.
-- [ ] **LogReader trait + JsonlLogReader:** stream(), recent(n), by_session(id), by_interaction(id).
-- [ ] **Accounting:** cost_counters в каждой записи; aggregate; заглушка compute_attention_cost.
-- [ ] **display_profile:** type, renderer_hint, user_visible.
-- [ ] Plain renderer (читает из лога).
-- [ ] Dioxus webview (показывает лог).
-- [ ] JSONL лог (command_run + system_event).
+- [ ] **LogWriter trait + JsonlLogWriter:** append (validate→redact→write→broadcast).
+- [ ] **LogReader trait + JsonlLogReader:** stream(), recent(n).
+- [ ] **LogStore:** объединяет writer + reader + broadcaster.
+- [ ] **Accounting:** cost_counters required+nested в каждой записи; aggregate; заглушка compute_attention_cost.
+- [ ] **display_profile:** required nested поля (type, renderer_hint, user_visible).
+- [ ] **Dioxus webview:** одно окно, показывает лог (plain/table).
+- [ ] Renderer подписан на LogEventStream.
+- [ ] `terio log` — история в UI.
+- [ ] `terio log --json` — история в JSON.
 - [ ] CI: cargo test + cargo build.
 
-**Критерий:** `terio run -- echo hello`, `terio run -- ls -l`, `terio log`. `~/.terio/instance.json` создан. `terio log --json` показывает cost_counters и display_profile.
+**Критерий:** `terio ask "list files"` → открывается Dioxus-окно с таблицей. `terio run -- echo hello` → запись в логе. `terio log --json` показывает cost_counters и display_profile.
 
 ### 1B: Mock agent + exact cache (без реальной модели)
 
@@ -56,7 +59,7 @@
 - [ ] Agent возвращает structured plan (command + argv).
 - [ ] cache_template с steps от модели → terio сохраняет.
 - [ ] План → подтверждение → выполнение.
-- [ ] Script Cache: scope.cwd_policy (same_cwd_only / any_cwd_with_parameters).
+- [ ] Script Cache: scope.cwd_policy.
 - [ ] Risk: destructive/network_write → всегда подтверждение.
 - [ ] Redaction secrets до отправки в модель.
 - [ ] `terio cancel`.
@@ -93,7 +96,7 @@
 - [ ] Авто-выбор renderer на основе display_profile.
 - [ ] Блок → Window эволюция (каждый блок — будущее окно).
 - [ ] Чат-окно: последовательность встроенных окон (картинки, сообщения, результаты).
-- [ ] `terio stats` с разделением attention_cost: user_sec, agent_sec, system_sec.
+- [ ] `terio stats` с разделением cost_counters.
 - [ ] Минимизация total_attention_cost при выборе маршрута (cache vs model).
 
 **Критерий:** `git log` — timeline. `terio log` показывает пары (interaction_id). `terio stats` — cost_counters.
@@ -112,16 +115,14 @@
 
 - [ ] Раздельные счётчики cost_counters в единой метрике total_attention_cost (реальные веса).
 - [ ] cache vs model: terio выбирает маршрут с минимальной total_attention_cost.
-- [ ] История стоимости: `terio cost` — отчёт по затратам внимания.
+- [ ] История стоимости: `terio cost` — отчёт по затратам.
 - [ ] Auto-tuning: terio предлагает выключить auto-run для дорогих скриптов.
 - [ ] **Pre-execution (предсказание ввода):** отдельный режим, terio предсказывает запрос до нажатия Enter, выполняет read_only шаги, показывает preview.
-- [ ] Request Matcher вызывается на partial input.
 
 ## 7. Desktop + сообщество + локальная LLM
 
-- [ ] Desktop (Rust + webview / Dioxus desktop).
+- [ ] **Desktop (standalone-пакет, system tray, автообновление).** До этого — Dioxus webview как встроенное окно.
 - [ ] Экспорт/импорт скриптов.
 - [ ] **Документ = мультиокно:** объединение окон в документ, экспорт как документация.
 - [ ] Реестр скриптов.
-- [ ] **Instance identity:** уникальные ID для шэринга и возобновления.
 - [ ] **Локальная LLM:** open-source модель с открытыми весами, обучаемая на хосте пользователя под создаваемые скрипты.

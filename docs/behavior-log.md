@@ -47,8 +47,8 @@ Machine-readable schema: [docs/schemas/behavior-log.schema.json](../docs/schemas
 | `interaction_id` | string | UUID одного запроса пользователя. Группирует пары (запрос → ответ). **Не требуется для `kind: system_event`** |
 | `ts` | ISO8601 | Время события |
 | `kind` | string | Тип записи |
-| `display_profile` | object | Как показывать пользователю (если отсутствует — defaults по kind) |
-| `cost_counters` | object | Сырые счётчики расходов (если отсутствует — все 0) |
+| `display_profile` | object | Как показывать пользователю. Required. Nested поля: `type`, `renderer_hint`, `user_visible`. |
+| `cost_counters` | object | Сырые счётчики расходов. Required. Nested: `observation_cost_hint`, `llm_cost`, `execution_cost`, `cache_cost`, `storage_cost`. |
 
 ### display_profile
 
@@ -56,12 +56,12 @@ Machine-readable schema: [docs/schemas/behavior-log.schema.json](../docs/schemas
 
 Пользователь настраивает через `terio config set display.<kind>.<field>`.
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| `type` | string | `auto` (определяется terio), `text`, `table`, `media`, `hidden`, `summary` |
-| `renderer_hint` | string | `auto`, `table`, `plain`, `timeline`, `card` |
-| `user_visible` | bool | Показывать пользователю или скрыть |
-| `summary_max_lines` | int | Для `type: summary` — сколько строк показывать |
+| Поле | Тип | Required | Описание |
+|------|-----|----------|----------|
+| `type` | string | да | `auto`, `text`, `table`, `media`, `hidden`, `summary` |
+| `renderer_hint` | string | да | `auto`, `table`, `plain`, `timeline`, `card` |
+| `user_visible` | bool | да | Показывать пользователю или скрыть |
+| `summary_max_lines` | int | нет | Для `type: summary` — сколько строк показывать |
 
 **Правила:**
 - `type: hidden` — запись не показывается в UI. **Не полагаться на это для безопасности** — секреты должны быть отредактированы до записи.
@@ -75,19 +75,19 @@ Machine-readable schema: [docs/schemas/behavior-log.schema.json](../docs/schemas
 
 **Важно:** `observation_cost_hint.user_sec` — заглушка. В MVP terio не умеет измерять внимание пользователя, поэтому значение всегда 0.0. Реальное измерение — в будущем.
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| `observation_cost_hint.user_sec` | f64 | Секунд внимания пользователя (MVP: заглушка, 0.0) |
-| `llm_cost.tokens` | int | Потраченные токены |
-| `llm_cost.duration_ms` | int | Время вызова модели (мс) |
-| `execution_cost.duration_ms` | int | Время выполнения команд (мс) |
-| `execution_cost.commands_executed` | int | Количество выполненных команд |
-| `execution_cost.bytes_read` | int | Байт прочитано из stdout/stderr |
-| `execution_cost.bytes_written` | int | Байт записано (артефакты) |
-| `cache_cost.lookup_ms` | int | Время поиска в кеше (мс) |
-| `cache_cost.hit` | bool | Был ли cache hit |
-| `storage_cost.bytes_written` | int | Байт записано в лог |
-| `storage_cost.bytes_read` | int | Байт прочитано из лога |
+| Поле | Тип | Required | Описание |
+|------|-----|----------|----------|
+| `observation_cost_hint.user_sec` | f64 | да | Секунд внимания пользователя (MVP: заглушка, 0.0) |
+| `llm_cost.tokens` | int | да | Потраченные токены |
+| `llm_cost.duration_ms` | int | да | Время вызова модели (мс) |
+| `execution_cost.duration_ms` | int | да | Время выполнения команд (мс) |
+| `execution_cost.commands_executed` | int | да | Количество выполненных команд |
+| `execution_cost.bytes_read` | int | да | Байт прочитано из stdout/stderr |
+| `execution_cost.bytes_written` | int | да | Байт записано (артефакты) |
+| `cache_cost.lookup_ms` | int | да | Время поиска в кеше (мс) |
+| `cache_cost.hit` | bool | да | Был ли cache hit |
+| `storage_cost.bytes_written` | int | да | Байт записано в лог |
+| `storage_cost.bytes_read` | int | да | Байт прочитано из лога |
 
 **Дублирование полей:** для удобства некоторые поля дублируются вне cost_counters (например, `agent_turn.tokens_used` = `cost_counters.llm_cost.tokens`, `command_run.duration_ms` = `cost_counters.execution_cost.duration_ms`). При реализации они должны быть в одном месте (cost_counters), а convenience-поля — зеркальные алиасы или вычисляемые.
 
@@ -255,12 +255,12 @@ pub trait LogWriter: Send + Sync {
 1. **Validate** — проверить entry на соответствие schema.
 2. **Redact** — удалить секреты из всех полей.
 3. **Serialize** — сериализовать в JSON.
-4. **Write** — записать в файловый буфер JSONL.
-5. **Broadcast** — только после успешной записи отправить в `LogEventStream`.
+4. **Write** — записать в `BufWriter` (буфер в памяти, не fsync).
+5. **Broadcast** — после успешной записи в буфер отправить в `LogEventStream`.
 
-Если запись в файл не удалась — broadcast не происходит. Renderer не видит запись, которая не попала на диск.
+`flush()` — вызов `fsync`/`flush` для сброса буфера на диск. Между `append` и `flush` запись существует в буфере и in-memory stream, но не гарантирована на диске до `flush`.
 
-`flush()` — сброс буфера на диск. Между `append` и `flush` запись может быть не видна на диске, но in-memory stream уже получил событие.
+**Гарантии:** broadcast происходит после записи в буфер, но до fsync. Если процесс упадёт между `append` и `flush`, запись может быть потеряна с диска, но in-memory stream уже доставил событие. Для MVP это приемлемо. Для durability-sensitive данных вызывать `flush` после каждой группы записей.
 
 ### LogReader (чтение)
 
@@ -274,7 +274,7 @@ pub trait LogReader: Send + Sync {
 ```
 
 - `stream()` — возвращает `broadcast::Receiver<LogEntry>` (in-memory, без I/O). Подписка возможна только после старта LogStore.
-- `recent(n)` — для MVP может сканировать файл линейно (до N записей или до размера). Оптимизация seek+streaming — в будущем.
+- `recent(n)` — для MVP сканирует файл линейно (до N записей или до размера). Seek+streaming — в будущем.
 - `by_interaction` — группирует записи по `interaction_id` (для показа пар).
 
 ### LogStore
@@ -292,25 +292,6 @@ impl LogStore {
     fn stream(&self) -> Receiver<LogEntry> { ... }
     fn recent(&self, n: usize) -> Result<Vec<LogEntry>> { ... }
 }
-```
-
-### Data flow
-
-```
-Execution Layer / Agent / Cache
-         │
-         ▼
-    LogStore::append(entry)
-         │
-         ├──▶ 1. validate
-         ├──▶ 2. redact
-         ├──▶ 3. serialize
-         ├──▶ 4. write JSONL (buffered)
-         ├──▶ 5. broadcast to LogEventStream (только после успешной записи)
-         │
-         ▼
-    Renderer подписан на stream()
-    (получает записи без I/O, после подтверждения записи на диск)
 ```
 
 ## interaction_id — группировка пар
@@ -348,7 +329,7 @@ Renderer группирует записи по `interaction_id` и показы
 ## Правила
 
 1. Secrets редэктятся из всех полей перед записью.
-2. Для `credential_access` — `display_profile.user_visible = false`. **Это только подсказка UI, не security boundary.** Секреты должны быть отред актированы до записи.
+2. Для `credential_access` — `display_profile.user_visible = false`. **Это только подсказка UI, не security boundary.** Секреты должны быть отредактированы до записи.
 3. prompt_summary — не более 512 символов, redacted.
 4. stdout_summary/stderr_summary — не более 1024 символов.
 5. Полный prompt не логируется (только summary).
