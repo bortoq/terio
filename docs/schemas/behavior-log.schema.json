@@ -3,7 +3,10 @@
   "title": "Behavior Log Schema (v1)",
   "description": "Схема записи в JSONL-логе поведения terio. Все записи имеют общие поля + поля специфичные для kind.",
   "type": "object",
-  "required": ["schema_version", "instance_id", "session_id", "interaction_id", "ts", "kind"],
+  "required": [
+    "schema_version", "instance_id", "session_id", "ts", "kind",
+    "display_profile", "cost_counters"
+  ],
   "properties": {
     "schema_version": {
       "type": "integer",
@@ -22,7 +25,7 @@
     "interaction_id": {
       "type": "string",
       "format": "uuid",
-      "description": "UUID одного запроса пользователя. Группирует пары (запрос → ответ)"
+      "description": "UUID одного запроса пользователя. Группирует пары (запрос → ответ). Обязателен для agent_turn, command_run, script_run."
     },
     "ts": {
       "type": "string",
@@ -36,7 +39,7 @@
     },
     "display_profile": {
       "type": "object",
-      "description": "Как показывать эту запись пользователю",
+      "description": "Как показывать эту запись пользователю. Если отсутствует — terio использует defaults по kind.",
       "properties": {
         "type": {
           "type": "string",
@@ -61,12 +64,12 @@
     },
     "cost_counters": {
       "type": "object",
-      "description": "Сырые счётчики расходов для будущей total_attention_cost",
+      "description": "Сырые счётчики расходов для будущей total_attention_cost. Если отсутствует — все счётчики считаются 0.",
       "properties": {
         "observation_cost_hint": {
           "type": "object",
           "properties": {
-            "user_sec": { "type": "number", "minimum": 0, "description": "Секунд внимания пользователя (MVP: заглушка)" }
+            "user_sec": { "type": "number", "minimum": 0, "description": "Секунд внимания пользователя (MVP: заглушка, всегда 0.0)" }
           }
         },
         "llm_cost": {
@@ -101,7 +104,8 @@
         }
       }
     },
-    "request": { "type": "string", "description": "Текст запроса (только для agent_turn, command_run, script_run)" },
+    "request": { "type": "string", "description": "Текст запроса" },
+    "parent_interaction_id": { "type": "string", "format": "uuid", "description": "interaction_id родительского запроса (если один запрос породил другой)" },
     "cwd": { "type": "string", "description": "Рабочая директория" },
     "risk": { "type": "string", "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"] },
     "status": { "type": "string", "enum": ["success", "failed", "cancelled"] },
@@ -122,7 +126,36 @@
     "tokens_saved_estimate": { "type": "integer", "minimum": 0 },
     "success_count_before": { "type": "integer", "minimum": 0 },
     "success_count_after": { "type": "integer", "minimum": 0 },
-    "steps": { "type": "array", "description": "Шаги выполнения (для script_run)" },
-    "parent_interaction_id": { "type": "string", "description": "interaction_id родительского запроса (если один запрос породил другой)" }
-  }
+    "steps": { "type": "array", "description": "Шаги выполнения (для script_run)" }
+  },
+  "allOf": [
+    {
+      "description": "agent_turn — запрос к модели",
+      "if": { "properties": { "kind": { "const": "agent_turn" } } },
+      "then": {
+        "required": ["interaction_id", "request", "cwd", "risk", "status", "plan", "model_provider", "model_name", "duration_ms", "tokens_used"]
+      }
+    },
+    {
+      "description": "command_run — выполнение shell-команды",
+      "if": { "properties": { "kind": { "const": "command_run" } } },
+      "then": {
+        "required": ["interaction_id", "request", "cwd", "risk", "status", "command", "exit", "duration_ms"]
+      }
+    },
+    {
+      "description": "script_run — выполнение скрипта из кеша",
+      "if": { "properties": { "kind": { "const": "script_run" } } },
+      "then": {
+        "required": ["interaction_id", "request", "cwd", "risk", "status", "script_id", "cache_hit", "model_called", "steps", "duration_ms"]
+      }
+    },
+    {
+      "description": "system_event — системные события (interaction_id не требуется)",
+      "if": { "properties": { "kind": { "const": "system_event" } } },
+      "then": {
+        "required": ["status"]
+      }
+    }
+  ]
 }

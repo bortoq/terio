@@ -29,9 +29,9 @@ Fuzzy match — никогда не auto-run в MVP. Только предлож
 
 ## Display Profile Policy
 
-Каждая запись лога имеет `display_profile`, который может скрывать или summarise записи на основе risk:
+`display_profile` — **только для презентации, не security boundary.** Безопасность обеспечивается redaction'ом секретов до записи в лог, а не скрытием в UI.
 
-- `credential_access` → `display_profile.user_visible = false` (всегда скрыто).
+- `credential_access` → `display_profile.user_visible = false` (подсказка UI).
 - `destructive` → `display_profile.type = "summary"` с подтверждением перед показом полного вывода.
 - `network_write` → `display_profile.renderer_hint = "card"` с явным отображением target URL.
 

@@ -6,7 +6,7 @@
   "required": [
     "schema_version", "script_id", "request_hash", "version",
     "normalized_request", "match_policy", "risk",
-    "parameters", "preconditions", "steps",
+    "scope", "parameters", "preconditions", "steps",
     "success_count", "trust_threshold", "created_at", "last_used_at"
   ],
   "properties": {
