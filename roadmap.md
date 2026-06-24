@@ -13,26 +13,26 @@
 - [x] identity: instance_id + session_id.
 - [x] display_profile — типизация записей лога.
 - [x] interaction_id — группировка пар.
-- [ ] Cargo.toml и базовая src/ структура.
-- [ ] CI: линтер + сборка.
+- [x] Cargo.toml и базовая src/ структура.
+- [x] CI: линтер + сборка.
 
 ## 1. Минимальный UI + shell + лог
 
 **Принцип:** terio — оконное приложение с первого коммита. Dioxus webview — основной UI. CLI (`terio run --`) — дополнительный интерфейс для автоматизации и отладки.
 
-- [ ] Cargo.toml, src/main.rs, src/cli.rs, src/ui/app.rs, src/run.rs.
-- [ ] Dioxus webview: окно с полем ввода и областью вывода.
-- [ ] `terio run -- <command>` — shell без модели.
-- [ ] Захват stdout, stderr, exit code, duration.
-- [ ] **Identity:** instance_id генерируется при первом запуске; session_id на каждый запуск.
-- [ ] **LogWriter trait + JsonlLogWriter:** append (validate→redact→write→broadcast).
-- [ ] **LogReader trait + JsonlLogReader:** stream(), recent(n).
-- [ ] **LogStore:** writer + reader + broadcaster.
-- [ ] **Accounting:** cost_counters required+nested в каждой записи; aggregate; заглушка compute_attention_cost.
-- [ ] **display_profile:** required nested поля (type, renderer_hint, user_visible).
-- [ ] Renderer подписан на LogEventStream. Dioxus показывает лог (plain text).
-- [ ] `terio log --json` — история в JSON.
-- [ ] CI: cargo test + cargo build.
+- [x] Cargo.toml, src/main.rs, src/cli.rs, src/ui/app.rs, src/run.rs.
+- [ ] Dioxus webview: окно с полем ввода и областью вывода (scaffold есть, требуется feature desktop).
+- [x] `terio run -- <command>` — shell без модели.
+- [x] Захват stdout, stderr, exit code, duration.
+- [x] **Identity:** instance_id (ULID) генерируется при первом запуске; session_id (UUID) на каждый запуск.
+- [x] **LogWriter trait + JsonlLogWriter:** append (validate → write → broadcast).
+- [x] **LogReader trait + JsonlLogReader:** stream(), recent(n), by_session(), by_interaction().
+- [x] **LogStore:** writer + reader + broadcaster.
+- [x] **Accounting:** cost_counters required+nested в каждой записи; aggregate; заглушка compute_attention_cost.
+- [x] **display_profile:** required nested поля (type, renderer_hint, user_visible).
+- [ ] Renderer подписан на LogEventStream. Dioxus показывает лог (plain text) — требуется desktop feature.
+- [x] `terio log --json` — история в JSON.
+- [x] CI: cargo test + cargo build.
 
 **Критерий:** `cargo run` открывает Dioxus-окно. `terio run -- ls -l` → запись в логе, отображается в окне. `terio log --json` показывает cost_counters и display_profile.
 

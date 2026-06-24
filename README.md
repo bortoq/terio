@@ -45,7 +45,17 @@ terio логирует запросы пользователя, выполнен
 
 ## Статус
 
-**Concept / pre-MVP.** В репозитории — документация и архитектурная спецификация. Первый код — в ближайших планах.
+**Phase 1 / MVP in progress.** В репозитории:
+- ✅ Rust/Dioxus scaffold, CI (fmt + clippy + build + test)
+- ✅ `terio run -- <command>` — shell-команды с захватом stdout/stderr/exit/duration
+- ✅ Identity: instance_id (ULID) + session_id (UUID)
+- ✅ JSONL лог (LogWriter/LogReader traits + JsonlLogWriter + JsonlLogReader + LogStore)
+- ✅ Accounting: cost_counters (5 групп), aggregate, compute_attention_cost (stub)
+- ✅ display_profile: type / renderer_hint / user_visible
+- ✅ `terio log --json` — история в JSON
+- ✅ 17 тестов (CI, identity, run, log, accounting)
+- ❌ Dioxus desktop UI — scaffold есть, требует feature `desktop` (GTK3/webkit2gtk на Linux)
+- ❌ Agent / cache / trust — Phase 2+
 
 ## Стек
 

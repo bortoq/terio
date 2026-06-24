@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -28,9 +28,9 @@ pub enum Command {
         command: Vec<String>,
     },
 
-    /// Показать историю в UI
+    /// Показать лог
     Log {
-        /// Вывод в JSON вместо UI
+        /// Вывод в JSON в stdout
         #[arg(long)]
         json: bool,
     },
@@ -46,10 +46,4 @@ pub enum Command {
 
     /// Настройки
     Config,
-}
-
-impl Cli {
-    pub fn parse() -> Self {
-        <Self as Parser>::parse()
-    }
 }
