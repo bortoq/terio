@@ -145,13 +145,9 @@ impl ScriptCache {
         Ok(())
     }
 
-    /// Проверяет, можно ли auto-run.
+    /// Проверяет, можно ли auto-run (делегирует в trust).
     pub fn can_auto_run(entry: &CacheEntry) -> bool {
-        entry.success_count >= entry.trust_threshold
-            && entry.risk != RiskLevel::Destructive
-            && entry.risk != RiskLevel::NetworkWrite
-            && entry.risk != RiskLevel::CredentialAccess
-            && entry.risk != RiskLevel::Financial
+        crate::trust::can_auto_run(entry)
     }
 }
 
