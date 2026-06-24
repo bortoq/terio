@@ -4,18 +4,19 @@ pub mod cli;
 pub mod types;
 
 pub mod accounting;
+pub mod agent;
+pub mod ask;
+pub mod cache;
 pub mod identity;
+pub mod matcher;
+pub mod redact;
 pub mod run;
 
 #[cfg(feature = "desktop")]
 pub mod ui;
 
 // Следующие фазы (заглушки)
-pub mod agent;
-pub mod ask;
-pub mod cache;
 pub mod config;
-pub mod matcher;
 pub mod render;
 pub mod trust;
 

@@ -34,6 +34,12 @@ dioxus = { version = "0.6", features = ["desktop"], optional = true }
 # Hashing
 sha2 = "0.10"
 
+# Redaction (regex-based)
+regex = "1"
+
+# Hex encoding (for SHA-256)
+hex = "0.4"
+
 [features]
 default = ["desktop"]
 desktop = ["dioxus"]

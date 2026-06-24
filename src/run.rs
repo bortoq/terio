@@ -50,8 +50,8 @@ pub fn make_command_run_entry(
     argv: &[String],
     result: &CommandResult,
 ) -> LogEntry {
-    let stdout_summary = truncate(&result.stdout, 1024);
-    let stderr_summary = truncate(&result.stderr, 1024);
+    let stdout_summary = truncate_safe(&result.stdout, 1024);
+    let stderr_summary = truncate_safe(&result.stderr, 1024);
 
     let status = if result.exit_code == 0 {
         LogStatus::Success
@@ -59,7 +59,7 @@ pub fn make_command_run_entry(
         LogStatus::Failed
     };
 
-    let bytes_read = stdout_summary.len() as u64 + stderr_summary.len() as u64;
+    let bytes_read = result.stdout.len() as u64 + result.stderr.len() as u64;
 
     LogEntry {
         schema_version: 1,
@@ -108,55 +108,151 @@ pub fn make_command_run_entry(
     }
 }
 
-/// Простейший risk-анализ по command + argv (MVP: только самые явные случаи).
+/// Создаёт LogEntry для command_run, когда команда не найдена.
+pub fn make_spawn_failed_entry(
+    instance_id: &str,
+    session_id: &str,
+    interaction_id: Option<String>,
+    request: &str,
+    cwd: &str,
+    argv: &[String],
+    error_msg: &str,
+) -> LogEntry {
+    LogEntry {
+        schema_version: 1,
+        instance_id: instance_id.to_string(),
+        session_id: session_id.to_string(),
+        ts: chrono::Utc::now().to_rfc3339(),
+        interaction_id,
+        parent_interaction_id: None,
+        kind: LogKind::CommandRun,
+        display_profile: crate::types::DisplayProfile::default(),
+        cost_counters: CostCounters::default(),
+        request: Some(request.to_string()),
+        cwd: Some(cwd.to_string()),
+        risk: Some(RiskLevel::ReadOnly),
+        status: Some(LogStatus::Failed),
+        failure_kind: Some("spawn_failed".to_string()),
+        prompt_summary: None,
+        plan: None,
+        model_provider: None,
+        model_name: None,
+        duration_ms: None,
+        tokens_used: None,
+        command: Some(CommandInfo {
+            display: argv.join(" "),
+            argv: argv.to_vec(),
+        }),
+        exit: None,
+        stdout_summary: None,
+        stderr_summary: Some(truncate_safe(error_msg, 1024)),
+        script_id: None,
+        cache_hit: None,
+        model_called: None,
+        tokens_saved_estimate: None,
+        success_count_before: None,
+        success_count_after: None,
+        steps: None,
+        description: None,
+    }
+}
+
+/// Простейший risk-анализ по command + argv (MVP).
 pub fn compute_risk(command: &str, args: &[String]) -> RiskLevel {
     // destructive
-    if matches!(command, "rm" | "mv") {
+    if command == "sudo" {
         return RiskLevel::Destructive;
     }
-    if command == "git"
-        && args
-            .iter()
-            .any(|a| matches!(a.as_str(), "push" | "clean" | "reset"))
-    {
+    if matches!(command, "rm" | "mv" | "dd") {
         return RiskLevel::Destructive;
+    }
+    if command == "git" {
+        // git clean → всегда destructive
+        if args.iter().any(|a| a == "clean") {
+            return RiskLevel::Destructive;
+        }
+        // git reset --hard → destructive; git reset без --hard → local_write
+        if args.iter().any(|a| a == "reset") && args.iter().any(|a| a == "--hard") {
+            return RiskLevel::Destructive;
+        }
+        // git reset без --hard не попадает в destructive
     }
     if command == "find" && args.iter().any(|a| a == "-delete" || a == "-exec") {
         return RiskLevel::Destructive;
     }
-    if command == "sudo" {
+    if command == "docker"
+        && args
+            .iter()
+            .any(|a| a == "rm" || a == "rmi" || a == "system")
+    {
         return RiskLevel::Destructive;
     }
 
     // network_write
-    if command == "curl"
-        && args
-            .iter()
-            .any(|a| a == "-X" || a == "--request" || a == "-d" || a == "--data")
-    {
+    if command == "git" && args.iter().any(|a| a == "push") {
         return RiskLevel::NetworkWrite;
     }
-    if command == "git" && args.iter().any(|a| a == "push") {
+    if command == "curl" {
+        let next_is_post = args.windows(2).any(|w| {
+            matches!(w[0].as_str(), "-X" | "--request")
+                && matches!(
+                    w[1].to_uppercase().as_str(),
+                    "POST" | "PUT" | "PATCH" | "DELETE"
+                )
+        });
+        let has_data = args
+            .iter()
+            .any(|a| a == "-d" || a == "--data" || a == "--data-binary");
+        if next_is_post || has_data {
+            return RiskLevel::NetworkWrite;
+        }
+    }
+    if command == "rsync" {
         return RiskLevel::NetworkWrite;
     }
 
     // network_read
-    if command == "curl" || command == "wget" {
+    if command == "curl" {
+        return RiskLevel::NetworkRead; // curl без POST/data
+    }
+    if command == "wget" {
         return RiskLevel::NetworkRead;
     }
     if command == "git"
         && args
             .iter()
-            .any(|a| a == "fetch" || a == "clone" || a == "pull")
+            .any(|a| matches!(a.as_str(), "fetch" | "clone" | "pull"))
     {
         return RiskLevel::NetworkRead;
     }
+    if command == "ssh" || command == "scp" {
+        return RiskLevel::NetworkRead;
+    }
+
+    // credential_access
+    if command == "cat"
+        && args.iter().any(|a| {
+            a.contains(".ssh") || a.contains("id_rsa") || a.contains(".env") || a.contains("token")
+        })
+    {
+        return RiskLevel::CredentialAccess;
+    }
 
     // local_write
-    if matches!(command, "mkdir" | "cp" | "touch") {
+    if matches!(command, "mkdir" | "cp" | "touch" | "chmod" | "ln") {
         return RiskLevel::LocalWrite;
     }
-    if command == "ffmpeg" {
+    if command == "ffmpeg" || command == "ffprobe" {
+        return RiskLevel::LocalWrite;
+    }
+    if command == "docker" && args.first().map(|s| s.as_str()) == Some("run") {
+        return RiskLevel::LocalWrite;
+    }
+    if command == "git"
+        && args
+            .iter()
+            .any(|a| a == "add" || a == "commit" || a == "checkout")
+    {
         return RiskLevel::LocalWrite;
     }
 
@@ -164,11 +260,14 @@ pub fn compute_risk(command: &str, args: &[String]) -> RiskLevel {
     RiskLevel::ReadOnly
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+/// Безопасное усечение строки по символам (не по байтам).
+pub fn truncate_safe(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
         s.to_string()
     } else {
-        format!("{}... (truncated)", &s[..max])
+        let truncated: String = chars[..max_chars].iter().collect();
+        format!("{}… (truncated)", truncated)
     }
 }
 
@@ -176,18 +275,22 @@ fn truncate(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
+    fn argv(cmd: &str, args: &[&str]) -> Vec<String> {
+        let mut v = vec![cmd.to_string()];
+        v.extend(args.iter().map(|s| s.to_string()));
+        v
+    }
+
     #[test]
     fn test_execute_echo() {
-        let argv = vec!["echo".to_string(), "hello".to_string()];
-        let result = execute(&argv).unwrap();
+        let result = execute(&argv("echo", &["hello"])).unwrap();
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout.trim(), "hello");
     }
 
     #[test]
     fn test_execute_non_zero_exit() {
-        let argv = vec!["sh".to_string(), "-c".to_string(), "exit 42".to_string()];
-        let result = execute(&argv).unwrap();
+        let result = execute(&argv("sh", &["-c", "exit 42"])).unwrap();
         assert_eq!(result.exit_code, 42);
     }
 
@@ -197,27 +300,99 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_risk_destructive() {
+    fn test_risk_destructive() {
         assert_eq!(
-            compute_risk("rm", &["-rf".to_string(), "/tmp".to_string()]),
+            compute_risk("rm", &["-rf".into(), "/tmp".into()]),
             RiskLevel::Destructive
         );
         assert_eq!(
-            compute_risk("sudo", &["apt".to_string()]),
+            compute_risk("sudo", &["apt".into()]),
+            RiskLevel::Destructive
+        );
+        assert_eq!(
+            compute_risk("git", &["reset".into(), "--hard".into()]),
+            RiskLevel::Destructive
+        );
+        assert_eq!(
+            compute_risk("git", &["clean".into(), "-fd".into()]),
             RiskLevel::Destructive
         );
     }
 
     #[test]
-    fn test_compute_risk_read_only() {
+    fn test_risk_network_write() {
         assert_eq!(
-            compute_risk("ls", &["-la".to_string()]),
-            RiskLevel::ReadOnly
+            compute_risk("git", &["push".into()]),
+            RiskLevel::NetworkWrite
         );
         assert_eq!(
-            compute_risk("echo", &["hello".to_string()]),
-            RiskLevel::ReadOnly
+            compute_risk(
+                "curl",
+                &[
+                    "-X".into(),
+                    "POST".into(),
+                    "-d".into(),
+                    "data".into(),
+                    "http://x".into()
+                ]
+            ),
+            RiskLevel::NetworkWrite
         );
+    }
+
+    #[test]
+    fn test_risk_network_read() {
+        assert_eq!(
+            compute_risk("curl", &["http://example.com".into()]),
+            RiskLevel::NetworkRead
+        );
+        assert_eq!(
+            compute_risk("git", &["fetch".into(), "origin".into()]),
+            RiskLevel::NetworkRead
+        );
+        assert_eq!(
+            compute_risk("wget", &["http://x".into()]),
+            RiskLevel::NetworkRead
+        );
+    }
+
+    #[test]
+    fn test_risk_read_only() {
+        assert_eq!(compute_risk("ls", &["-la".into()]), RiskLevel::ReadOnly);
+        assert_eq!(compute_risk("echo", &["hello".into()]), RiskLevel::ReadOnly);
+    }
+
+    #[test]
+    fn test_risk_local_write() {
+        assert_eq!(
+            compute_risk("mkdir", &["-p".into(), "dir".into()]),
+            RiskLevel::LocalWrite
+        );
+        assert_eq!(
+            compute_risk("git", &["add".into(), "file".into()]),
+            RiskLevel::LocalWrite
+        );
+    }
+
+    #[test]
+    fn test_credential_access() {
+        assert_eq!(
+            compute_risk("cat", &["~/.ssh/id_rsa".into()]),
+            RiskLevel::CredentialAccess
+        );
+    }
+
+    #[test]
+    fn test_truncate_safe() {
+        assert_eq!(truncate_safe("hello", 10), "hello");
+        assert_eq!(truncate_safe("hello world", 5), "hello… (truncated)");
+        // multibyte UTF-8
+        let s = "привет мир";
+        assert_eq!(truncate_safe(s, 6), "привет… (truncated)");
+        // truncation to 1 char of multibyte
+        let t = truncate_safe(s, 1);
+        assert_eq!(t, "п… (truncated)");
+        assert_eq!(t.chars().next(), Some('п'));
     }
 
     #[test]
@@ -234,12 +409,53 @@ mod tests {
             Some("inter1".into()),
             "say hello",
             "/tmp",
-            &["echo".into(), "hello".into()],
+            &argv("echo", &["hello"]),
             &result,
         );
         assert_eq!(entry.instance_id, "inst1");
         assert_eq!(entry.kind, LogKind::CommandRun);
         assert_eq!(entry.exit, Some(0));
         assert_eq!(entry.stdout_summary, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_make_spawn_failed_entry() {
+        let entry = make_spawn_failed_entry(
+            "i1",
+            "s1",
+            Some("int1".into()),
+            "run bad",
+            "/tmp",
+            &argv("nonexistent", &[]),
+            "No such file or directory",
+        );
+        assert_eq!(entry.status, Some(LogStatus::Failed));
+        assert_eq!(entry.failure_kind, Some("spawn_failed".to_string()));
+    }
+
+    #[test]
+    fn test_bytes_read_from_original() {
+        let result = CommandResult {
+            exit_code: 0,
+            stdout: "a".repeat(2000),
+            stderr: String::new(),
+            duration: std::time::Duration::from_millis(1),
+        };
+        let entry = make_command_run_entry(
+            "i1",
+            "s1",
+            None,
+            "big",
+            "/tmp",
+            &argv("echo", &["big"]),
+            &result,
+        );
+        // bytes_read берётся из полного stdout, не из summary
+        assert_eq!(entry.cost_counters.execution_cost.bytes_read, 2000);
+        // stdout_summary усечён до 1024
+        assert_eq!(
+            entry.stdout_summary.as_ref().map(|s| s.len()),
+            Some("a".repeat(1024).len() + "… (truncated)".len())
+        );
     }
 }

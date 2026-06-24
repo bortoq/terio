@@ -3,6 +3,7 @@
 pub mod reader;
 pub mod writer;
 
+use crate::redact::redact;
 use crate::types::LogEntry;
 use anyhow::Result;
 use tokio::sync::broadcast;
@@ -48,12 +49,9 @@ impl LogStore {
         }
     }
 
-    /// Добавить запись: validate → writer.append → broadcast.
+    /// Добавить запись: redact → writer.append → broadcast.
     pub fn append(&self, entry: LogEntry) -> Result<()> {
-        // validate (MVP: minimal — просто десериализация)
-        let _: serde_json::Value = serde_json::to_value(&entry)
-            .map_err(|e| anyhow::anyhow!("serialization failed: {e}"))?;
-
+        let entry = apply_redaction(entry);
         self.writer.append(entry.clone())?;
         let _ = self.broadcaster.send(entry);
         Ok(())
@@ -72,5 +70,73 @@ impl LogStore {
     /// Подписка на in-memory stream.
     pub fn stream(&self) -> broadcast::Receiver<LogEntry> {
         self.broadcaster.subscribe()
+    }
+}
+
+/// Применяет redaction ко всем текстовым полям LogEntry.
+fn apply_redaction(mut entry: LogEntry) -> LogEntry {
+    if let Some(ref mut s) = entry.request {
+        *s = redact(s);
+    }
+    if let Some(ref mut s) = entry.cwd {
+        *s = redact(s);
+    }
+    if let Some(ref mut s) = entry.prompt_summary {
+        *s = redact(s);
+    }
+    if let Some(ref mut s) = entry.stdout_summary {
+        *s = redact(s);
+    }
+    if let Some(ref mut s) = entry.stderr_summary {
+        *s = redact(s);
+    }
+    if let Some(ref mut s) = entry.description {
+        *s = redact(s);
+    }
+    if let Some(ref mut cmd) = entry.command {
+        let display = redact(&cmd.display);
+        let argv: Vec<String> = cmd.argv.iter().map(|a| redact(a)).collect();
+        entry.command = Some(crate::types::CommandInfo { display, argv });
+    }
+    entry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log::writer::JsonlLogWriter;
+    use crate::types::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_redaction_applied() {
+        let dir = TempDir::new().unwrap();
+        let writer = Box::new(JsonlLogWriter::new(dir.path()).unwrap());
+        let reader = Box::new(JsonlLogReader::new(dir.path()));
+        let store = LogStore::new(writer, reader, 16);
+
+        let mut entry = LogEntry::new_command_run(
+            "i1",
+            "s1",
+            Some("int1".into()),
+            "api_key=secret123",
+            "/tmp",
+            &["echo".into(), "api_key=secret123".into()],
+            0,
+            std::time::Duration::from_millis(1),
+            "api_key=secret123",
+            "",
+            CostCounters::default(),
+        );
+        entry.stdout_summary = Some("token: abc123".into());
+
+        store.append(entry).unwrap();
+
+        let recent = store.recent(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        let e = &recent[0];
+        assert!(e.request.as_deref().unwrap().contains("[REDACTED]"));
+        assert!(e.stdout_summary.as_deref().unwrap().contains("[REDACTED]"));
+        assert!(!e.request.as_deref().unwrap().contains("secret123"));
     }
 }
