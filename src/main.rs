@@ -11,6 +11,7 @@ use terio::log::writer::JsonlLogWriter;
 use terio::log::{LogReader, LogStore};
 use terio::provider::create_provider;
 use terio::run;
+use terio::undo;
 
 fn main() -> anyhow::Result<()> {
     // Signal handler для Ctrl+C — ДО任何 другой инициализации
@@ -67,6 +68,14 @@ fn main() -> anyhow::Result<()> {
             handle_confirm(&identity, &log_dir)?;
         }
 
+        Some(Command::Undo) => {
+            handle_undo(&identity, &log_dir)?;
+        }
+
+        Some(Command::Redo) => {
+            handle_redo(&identity, &log_dir)?;
+        }
+
         Some(Command::Config(cmd)) => {
             let mut config = Config::load().unwrap_or_default();
             match cmd {
@@ -103,6 +112,14 @@ fn handle_run(
         eprintln!("⚠️  ВНИМАНИЕ: сетевая запись: {}", command.join(" "));
     } else if risk == terio::types::RiskLevel::CredentialAccess {
         eprintln!("⚠️  ВНИМАНИЕ: доступ к credentials: {}", command.join(" "));
+    }
+    if matches!(
+        risk,
+        terio::types::RiskLevel::LocalWrite
+            | terio::types::RiskLevel::Destructive
+            | terio::types::RiskLevel::NetworkWrite
+    ) {
+        eprintln!("{}", undo::direct_run_warning());
     }
 
     let result = match run::execute(command) {
@@ -199,6 +216,58 @@ fn handle_confirm(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Res
     )?;
 
     store.flush()?;
+    Ok(())
+}
+
+fn handle_undo(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Result<()> {
+    let writer = Box::new(JsonlLogWriter::new(log_dir)?);
+    let reader = Box::new(JsonlLogReader::new(log_dir));
+    let store = LogStore::new(writer, reader, 256);
+    match undo::undo_latest()? {
+        Some(record) => {
+            eprintln!("terio: undo выполнен для \"{}\".", record.summary);
+            append_system_event(
+                identity,
+                &store,
+                &format!("undo applied: {}", record.summary),
+            )?;
+        }
+        None => eprintln!("terio: нет доступного undo."),
+    }
+    store.flush()?;
+    Ok(())
+}
+
+fn handle_redo(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Result<()> {
+    let writer = Box::new(JsonlLogWriter::new(log_dir)?);
+    let reader = Box::new(JsonlLogReader::new(log_dir));
+    let store = LogStore::new(writer, reader, 256);
+    match undo::redo_latest()? {
+        Some(record) => {
+            eprintln!("terio: redo выполнен для \"{}\".", record.summary);
+            append_system_event(
+                identity,
+                &store,
+                &format!("redo applied: {}", record.summary),
+            )?;
+        }
+        None => eprintln!("terio: нет доступного redo."),
+    }
+    store.flush()?;
+    Ok(())
+}
+
+fn append_system_event(
+    identity: &Identity,
+    store: &LogStore,
+    description: &str,
+) -> anyhow::Result<()> {
+    let entry = terio::types::LogEntry::new_system_event(
+        &identity.instance_id,
+        &identity.session_id,
+        description,
+    );
+    store.append(entry)?;
     Ok(())
 }
 

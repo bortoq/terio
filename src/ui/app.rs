@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::log::LogReader;
 use crate::trust::trust_level_str;
 use crate::types::LogEntry;
+use crate::undo::UndoStatus;
 use dioxus::prelude::*;
 use std::sync::Mutex;
 
@@ -141,6 +142,17 @@ fn refresh_entries() {
     }
 }
 
+fn refresh_undo_status() -> UndoStatus {
+    crate::undo::latest_status().unwrap_or_default()
+}
+
+fn undo_summary_label(status: &UndoStatus) -> String {
+    status
+        .summary
+        .clone()
+        .unwrap_or_else(|| "undo/redo unavailable".to_string())
+}
+
 fn run_terio_args(args: &[String]) {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("terio"));
     let args = args.to_vec();
@@ -165,6 +177,7 @@ fn app() -> Element {
     let mut input_text = use_signal(String::new);
     let mut pending = use_signal(|| load_pending_confirmation().ok().flatten());
     let mut selected = use_signal(|| None::<String>);
+    let mut undo_status = use_signal(refresh_undo_status);
     let initial_config = Config::load().unwrap_or_default();
     let mut show_config = use_signal(|| initial_config.ui.show_config);
     let mut config_text = use_signal(|| initial_config.render_for_display());
@@ -181,6 +194,7 @@ fn app() -> Element {
     let on_f5 = move |_| {
         refresh_entries();
         pending.set(load_pending_confirmation().ok().flatten());
+        undo_status.set(refresh_undo_status());
         config_text.set(Config::load().unwrap_or_default().render_for_display());
         refresh_tick += 1;
     };
@@ -209,6 +223,31 @@ fn app() -> Element {
                 ",
                 div { style: "font-size: 18px; font-weight: bold; color: #569cd6;", "terio" }
                 div { style: "font-size: 12px; color: #888;", "log · {count} записей" }
+                div { style: "font-size: 12px; color: #888;", "{undo_summary_label(&undo_status())}" }
+                button {
+                    onclick: move |_| {
+                        if undo_status().can_undo {
+                            run_terio_args(&["undo".to_string()]);
+                        }
+                    },
+                    style: format!(
+                        "background: {}; border: 1px solid #555; color: #d4d4d4; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;",
+                        if undo_status().can_undo { "#3c3c3c" } else { "#2a2a2a" }
+                    ),
+                    "Undo"
+                }
+                button {
+                    onclick: move |_| {
+                        if undo_status().can_redo {
+                            run_terio_args(&["redo".to_string()]);
+                        }
+                    },
+                    style: format!(
+                        "background: {}; border: 1px solid #555; color: #d4d4d4; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;",
+                        if undo_status().can_redo { "#3c3c3c" } else { "#2a2a2a" }
+                    ),
+                    "Redo"
+                }
                 button {
                     onclick: move |_| {
                         let next = !show_config();
@@ -560,5 +599,23 @@ mod tests {
         let rows = prepare_rows(&[entry]);
         assert_eq!(rows[0].stdout, "hello");
         assert_eq!(rows[0].stderr, "warn");
+    }
+
+    #[test]
+    fn test_undo_summary_label_prefers_summary() {
+        let label = undo_summary_label(&UndoStatus {
+            can_undo: true,
+            can_redo: false,
+            summary: Some("Create file".into()),
+        });
+        assert_eq!(label, "Create file");
+    }
+
+    #[test]
+    fn test_undo_summary_label_has_fallback() {
+        assert_eq!(
+            undo_summary_label(&UndoStatus::default()),
+            "undo/redo unavailable"
+        );
     }
 }

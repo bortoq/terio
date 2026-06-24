@@ -50,6 +50,31 @@ pub struct UiConfig {
     pub last_selected_policy: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UndoMode {
+    Warn,
+    #[default]
+    Bubblewrap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UndoConfig {
+    #[serde(default)]
+    pub experimental_enabled: bool,
+    #[serde(default)]
+    pub mode: UndoMode,
+}
+
+impl Default for UndoConfig {
+    fn default() -> Self {
+        Self {
+            experimental_enabled: false,
+            mode: UndoMode::Bubblewrap,
+        }
+    }
+}
+
 /// Top-level config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -65,6 +90,8 @@ pub struct Config {
     pub policy_overrides: HashMap<String, TrustPolicy>,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub undo: UndoConfig,
 }
 
 impl Config {
@@ -144,6 +171,20 @@ impl Config {
             "ui.last_selected_policy" => {
                 self.ui.last_selected_policy = Some(value.to_string());
             }
+            "undo.enabled" | "undo.experimental_enabled" => {
+                self.undo.experimental_enabled = match value {
+                    "true" | "1" | "yes" => true,
+                    "false" | "0" | "no" => false,
+                    other => anyhow::bail!("unknown bool value for undo.enabled: {other}"),
+                };
+            }
+            "undo.mode" => {
+                self.undo.mode = match value {
+                    "warn" => UndoMode::Warn,
+                    "bubblewrap" | "sandbox" => UndoMode::Bubblewrap,
+                    other => anyhow::bail!("unknown undo.mode: {other}. Use: warn, bubblewrap"),
+                };
+            }
             _ => anyhow::bail!("unknown config key: {key}"),
         }
         Ok(())
@@ -182,6 +223,10 @@ impl Config {
         if let Some(ref policy) = self.ui.last_selected_policy {
             lines.push(format!("UI last policy: {}", policy));
         }
+        lines.push(format!(
+            "Undo:       enabled={} mode={:?}",
+            self.undo.experimental_enabled, self.undo.mode
+        ));
         format!("{}\n", lines.join("\n"))
     }
 }
@@ -251,6 +296,15 @@ mod tests {
     fn test_config_set_unknown_key() {
         let mut config = Config::default();
         assert!(config.set("nonexistent", "value").is_err());
+    }
+
+    #[test]
+    fn test_config_set_undo_mode_and_enabled() {
+        let mut config = Config::default();
+        config.set("undo.enabled", "true").unwrap();
+        config.set("undo.mode", "warn").unwrap();
+        assert!(config.undo.experimental_enabled);
+        assert_eq!(config.undo.mode, UndoMode::Warn);
     }
 
     #[test]

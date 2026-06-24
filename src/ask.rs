@@ -10,10 +10,11 @@ use crate::redact::redact;
 use crate::run::{self, CommandResult};
 use crate::trust::{evaluate_cache_entry, trust_level_str, validate_step_paths, TrustEvaluation};
 use crate::types::*;
+use crate::undo;
 use anyhow::{bail, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Результат обработки запроса.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -125,14 +126,14 @@ pub fn process_request(
         }
 
         // Выполняем шаги из кеша
-        let mut results = Vec::new();
-        let mut total_duration = std::time::Duration::default();
-
-        for step in &entry.steps {
-            let result = run::execute(&step.argv)?;
-            total_duration += result.duration;
-            results.push(result);
-        }
+        let (results, total_duration, _, undo_record) = execute_cached_steps(
+            request,
+            &format!("Cached script: {}", entry.normalized_request),
+            &entry.risk,
+            &entry.steps,
+            &cwd,
+            &config,
+        )?;
 
         let all_exit_zero = results.iter().all(|r| r.exit_code == 0);
         let interaction_id = Identity::new_interaction_id();
@@ -147,6 +148,18 @@ pub fn process_request(
             total_duration,
             log_store,
         )?;
+        if let Some(record) = undo_record {
+            log_undo_event(
+                identity,
+                &interaction_id,
+                &format!(
+                    "undo snapshot ready: {} [{} paths]",
+                    record.summary,
+                    record.paths.len()
+                ),
+                log_store,
+            )?;
+        }
 
         if all_exit_zero {
             cache.increment_success(&entry.request_hash)?;
@@ -196,7 +209,15 @@ pub fn process_request(
     }
 
     // 4. Выполняем команды
-    let (results, total_duration, all_exit_zero) = execute_plan_commands(&plan.commands)?;
+    let (results, total_duration, all_exit_zero, undo_record) = execute_agent_plan_commands(
+        request,
+        &plan.summary,
+        &plan.risk,
+        &plan.commands,
+        &steps,
+        &cwd,
+        &config,
+    )?;
 
     // 5. Сохраняем в кеш только если все команды успешны
     let entry = if all_exit_zero && !ScriptCache::contains_sensitive_data(request, &steps) {
@@ -222,6 +243,18 @@ pub fn process_request(
             )?;
         }
     }
+    if let Some(record) = undo_record {
+        log_undo_event(
+            identity,
+            &interaction_id,
+            &format!(
+                "undo snapshot ready: {} [{} paths]",
+                record.summary,
+                record.paths.len()
+            ),
+            log_store,
+        )?;
+    }
 
     Ok(AskResult::FromAgent {
         entry,
@@ -232,21 +265,81 @@ pub fn process_request(
     })
 }
 
-fn execute_plan_commands(
-    commands: &[crate::agent::AgentCommand],
-) -> Result<(Vec<CommandResult>, std::time::Duration, bool)> {
+fn execute_cached_steps(
+    request: &str,
+    summary: &str,
+    risk: &RiskLevel,
+    steps: &[crate::cache::CachedStep],
+    cwd: &str,
+    config: &Config,
+) -> Result<(
+    Vec<CommandResult>,
+    std::time::Duration,
+    bool,
+    Option<undo::UndoRecord>,
+)> {
     let mut results = Vec::new();
     let mut total_duration = std::time::Duration::default();
     let mut all_exit_zero = true;
+    let mut session = undo::start_session(config, request, summary, steps, Path::new(cwd), risk)?;
 
-    for cmd in commands {
-        let result = run::execute(&cmd.argv)?;
+    for step in steps {
+        let argv = if let Some(session) = session.as_mut() {
+            session.wrap_command(&step.argv).argv
+        } else {
+            step.argv.clone()
+        };
+        let result = run::execute(&argv)?;
         all_exit_zero = all_exit_zero && (result.exit_code == 0);
         total_duration += result.duration;
         results.push(result);
     }
 
-    Ok((results, total_duration, all_exit_zero))
+    let undo_record = match session {
+        Some(session) => Some(session.finalize_success()?),
+        None => None,
+    };
+
+    Ok((results, total_duration, all_exit_zero, undo_record))
+}
+
+fn execute_agent_plan_commands(
+    request: &str,
+    summary: &str,
+    risk: &RiskLevel,
+    commands: &[crate::agent::AgentCommand],
+    steps: &[crate::cache::CachedStep],
+    cwd: &str,
+    config: &Config,
+) -> Result<(
+    Vec<CommandResult>,
+    std::time::Duration,
+    bool,
+    Option<undo::UndoRecord>,
+)> {
+    let mut results = Vec::new();
+    let mut total_duration = std::time::Duration::default();
+    let mut all_exit_zero = true;
+    let mut session = undo::start_session(config, request, summary, steps, Path::new(cwd), risk)?;
+
+    for cmd in commands {
+        let argv = if let Some(session) = session.as_mut() {
+            session.wrap_command(&cmd.argv).argv
+        } else {
+            cmd.argv.clone()
+        };
+        let result = run::execute(&argv)?;
+        all_exit_zero = all_exit_zero && (result.exit_code == 0);
+        total_duration += result.duration;
+        results.push(result);
+    }
+
+    let undo_record = match session {
+        Some(session) => Some(session.finalize_success()?),
+        None => None,
+    };
+
+    Ok((results, total_duration, all_exit_zero, undo_record))
 }
 
 fn pending_summary_from_cache(
@@ -458,13 +551,14 @@ pub fn confirm_pending(
             if !evaluation.scope_ok || !evaluation.path_boundary_ok {
                 AskResult::Declined
             } else {
-                let mut results = Vec::new();
-                let mut total_duration = std::time::Duration::default();
-                for step in &entry.steps {
-                    let result = run::execute(&step.argv)?;
-                    total_duration += result.duration;
-                    results.push(result);
-                }
+                let (results, total_duration, _, undo_record) = execute_cached_steps(
+                    &state.request,
+                    &format!("Cached script: {}", entry.normalized_request),
+                    &entry.risk,
+                    &entry.steps,
+                    &cwd,
+                    &config,
+                )?;
                 let all_exit_zero = results.iter().all(|r| r.exit_code == 0);
                 let interaction_id = Identity::new_interaction_id();
                 log_script_run(
@@ -477,6 +571,18 @@ pub fn confirm_pending(
                     total_duration,
                     log_store,
                 )?;
+                if let Some(record) = undo_record {
+                    log_undo_event(
+                        identity,
+                        &interaction_id,
+                        &format!(
+                            "undo snapshot ready: {} [{} paths]",
+                            record.summary,
+                            record.paths.len()
+                        ),
+                        log_store,
+                    )?;
+                }
                 if all_exit_zero {
                     cache.increment_success(&entry.request_hash)?;
                 }
@@ -494,8 +600,16 @@ pub fn confirm_pending(
             if validate_step_paths(&steps, &cwd).is_err() {
                 AskResult::Declined
             } else {
-                let (results, total_duration, all_exit_zero) =
-                    execute_plan_commands(&plan.commands)?;
+                let (results, total_duration, all_exit_zero, undo_record) =
+                    execute_agent_plan_commands(
+                        &state.request,
+                        &plan.summary,
+                        &plan.risk,
+                        &plan.commands,
+                        &steps,
+                        &cwd,
+                        &config,
+                    )?;
                 let entry = if all_exit_zero
                     && !ScriptCache::contains_sensitive_data(&state.request, &steps)
                 {
@@ -524,6 +638,18 @@ pub fn confirm_pending(
                             log_store,
                         )?;
                     }
+                }
+                if let Some(record) = undo_record {
+                    log_undo_event(
+                        identity,
+                        &interaction_id,
+                        &format!(
+                            "undo snapshot ready: {} [{} paths]",
+                            record.summary,
+                            record.paths.len()
+                        ),
+                        log_store,
+                    )?;
                 }
                 AskResult::FromAgent {
                     entry,
@@ -688,6 +814,19 @@ fn log_command_run(
     Ok(())
 }
 
+fn log_undo_event(
+    identity: &Identity,
+    interaction_id: &str,
+    description: &str,
+    store: &LogStore,
+) -> Result<()> {
+    let mut entry =
+        LogEntry::new_system_event(&identity.instance_id, &identity.session_id, description);
+    entry.interaction_id = Some(interaction_id.to_string());
+    store.append(entry)?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn log_script_run(
     identity: &Identity,
@@ -829,6 +968,7 @@ mod tests {
     use crate::log::writer::JsonlLogWriter;
     use crate::log::LogWriter;
     use crate::provider::Provider;
+    use crate::undo;
     use anyhow::Result;
     use tempfile::TempDir;
 
@@ -1097,6 +1237,67 @@ mod tests {
 
         let result = process_request("write note", &identity, &store, &cache, &provider, false)?;
         assert!(matches!(result, AskResult::PendingConfirmation { .. }));
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_agent_local_write_creates_undo_snapshot() -> Result<()> {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let prev_cwd = std::env::current_dir()?;
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+        std::env::set_current_dir(dir.path())?;
+
+        let mut config = Config::default();
+        config.undo.experimental_enabled = true;
+        config.undo.mode = crate::config::UndoMode::Warn;
+        config.save()?;
+
+        let identity = Identity::load_or_create()?;
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let writer = Box::new(JsonlLogWriter::new(&log_dir)?);
+        let reader = Box::new(JsonlLogReader::new(&log_dir));
+        let store = LogStore::new(writer, reader, 16);
+        let cache = ScriptCache::new()?;
+
+        let provider = FixedPlanProvider {
+            plan: AgentPlan {
+                summary: "Create snapshot note".into(),
+                risk: RiskLevel::LocalWrite,
+                commands: vec![AgentCommand {
+                    command: "touch".into(),
+                    argv: vec!["touch".into(), "snapshot-note.txt".into()],
+                    risk: RiskLevel::LocalWrite,
+                    reason: "create file".into(),
+                }],
+                cache_template: None,
+                tokens_used: None,
+            },
+        };
+
+        let result = process_request(
+            "create snapshot note",
+            &identity,
+            &store,
+            &cache,
+            &provider,
+            true,
+        )?;
+        assert!(matches!(result, AskResult::FromAgent { .. }));
+        assert!(dir.path().join("snapshot-note.txt").exists());
+
+        let undo_record = undo::undo_latest()?.expect("undo record");
+        assert_eq!(undo_record.state, undo::UndoState::Undone);
+        assert!(!dir.path().join("snapshot-note.txt").exists());
+
+        std::env::set_current_dir(prev_cwd)?;
         if let Some(prev) = prev_home {
             std::env::set_var("HOME", prev);
         } else {

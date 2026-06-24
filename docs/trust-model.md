@@ -60,8 +60,9 @@ Auto-run возможен только если scope policy соблюдена.
 
 - Off by default.
 - Не гарантируется для произвольных shell.
-- Best-effort для скриптов из кеша.
-- Два режима: sandbox (bubblewrap) или warn.
+- В текущей реализации покрывает `terio ask` и cache-script replay, но не `terio run -- ...`.
+- Best-effort snapshot-backed restore: undo/redo восстанавливает сохранённый file state, а не переисполняет shell.
+- Два режима: `warn` или `bubblewrap` sandbox с fallback в `warn`, если `bwrap` недоступен.
 
 ## Redaction
 

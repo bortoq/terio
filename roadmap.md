@@ -89,12 +89,12 @@
 
 ## 5. Undo/Redo (Experimental)
 
-- [ ] Sandbox (bubblewrap/overlay FS)
-- [ ] Warn (только предупреждение)
-- [ ] Best-effort snapshot для скриптов
-- [ ] `terio undo`, `terio redo`
-- [ ] Off by default
-- [ ] Кнопки Undo/Redo в UI
+- [x] Sandbox (bubblewrap/overlay FS)
+- [x] Warn (только предупреждение)
+- [x] Best-effort snapshot для скриптов
+- [x] `terio undo`, `terio redo`
+- [x] Off by default
+- [x] Кнопки Undo/Redo в UI
 
 ---
 

@@ -50,6 +50,12 @@ pub enum Command {
     /// Выполнить ранее подтверждённый сохранённый план без повторного запроса к provider
     Confirm,
 
+    /// Откатить последнее snapshot-backed выполнение script execution
+    Undo,
+
+    /// Повторно применить последний undo snapshot
+    Redo,
+
     /// Управление настройками
     #[command(subcommand)]
     Config(ConfigCmd),

@@ -11,9 +11,10 @@ terio принимает естественный запрос, строит str
 - JSONL log + `LogStore` + Dioxus desktop UI
 - Trust layer: policy, scope/path validation, exact/fuzzy distinction, confirmation
 - Pending confirmation с exact saved execution через `terio confirm`
+- Experimental undo/redo for `terio ask` and cache-script replay with snapshot storage
 - Script Cache для exact normalized replay
 - Redaction для лога, preview pending state и cache admission checks
-- `terio stats`, `terio log --json`, `terio config`, `terio cancel`
+- `terio stats`, `terio log --json`, `terio config`, `terio cancel`, `terio undo`, `terio redo`
 
 ## Ограничения текущего прототипа
 
@@ -21,6 +22,8 @@ terio принимает естественный запрос, строит str
 - API key и exact pending execution state хранятся локально на диске в plaintext; на Unix файлы пишутся с правами `0600`, но это не защищает от локального компромета хоста или пользователя
 - Sensitive commands/arguments не попадают в cache replay files
 - Pending preview и exact execution payload hash-bound: `terio confirm` выполнит только тот payload, который соответствует сохранённому preview
+- Undo/redo остаётся best-effort и off by default; direct `terio run -- ...` явно исключён из snapshot guarantees
+- `bubblewrap` sandbox experimental: при включённом `undo.mode=bubblewrap` terio пытается завернуть script execution в `bwrap`, но fallback в warn-mode допускается и логируется
 - UI работает как desktop control panel: actions запускаются non-blocking, но live-stream stdout/stderr пока нет
 
 ## Текущее состояние
@@ -41,6 +44,8 @@ terio принимает естественный запрос, строит str
 ```bash
 terio ask "list files"
 terio confirm
+terio undo
+terio redo
 terio run -- echo hello
 terio log --json
 terio stats

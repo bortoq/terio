@@ -12,6 +12,7 @@ pub mod matcher;
 pub mod provider;
 pub mod redact;
 pub mod run;
+pub mod undo;
 
 #[cfg(feature = "desktop")]
 pub mod ui;
