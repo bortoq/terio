@@ -1,72 +1,57 @@
 # terio
 
-**Агрегатор интерфейсов. Все программы с CLI или API — из одной точки.**
+**Агрегатор интерфейсов с AI-планированием, локальным логом и replay cache.**
 
-terio — это оконное приложение со встроенной AI-моделью. Вы говорите, что нужно сделать. terio строит цепочку команд, выполняет её и показывает результат. Удачная цепочка сохраняется как скрипт. В следующий раз тот же запрос выполняется без модели — мгновенно и дёшево.
+terio принимает естественный запрос, строит structured plan команд, показывает риск и подтверждение, выполняет шаги и пишет всё в локальный JSONL-лог. Удачные повторяемые сценарии могут переиспользоваться из Script Cache без повторного вызова модели.
 
-terio считает, сколько ресурсов сэкономлено: избегнутых вызовов модели, сэкономленных токенов, переиспользованных команд, затраченного времени.
+## Что уже есть
 
-## Для кого terio
+- `terio ask "<request>"` для mock provider и baseline OpenAI provider
+- `terio run -- <command...>` для прямого shell execution
+- JSONL log + `LogStore` + Dioxus desktop UI
+- Trust layer: policy, scope/path validation, exact/fuzzy distinction, confirmation
+- Pending confirmation с exact saved execution через `terio confirm`
+- Script Cache для exact normalized replay
+- Redaction для лога, preview pending state и cache admission checks
+- `terio stats`, `terio log --json`, `terio config`, `terio cancel`
 
-Для тех, кто использует командную строку и хочет управлять программами через единый интерфейс.
+## Ограничения текущего прототипа
 
-## Принцип
+- OpenAI provider пока experimental: строгий JSON mode, `cache_template` и usage-token accounting ещё не реализованы
+- API key и exact pending execution state хранятся локально на диске; на Unix файлы пишутся с правами `0600`
+- Sensitive commands/arguments не попадают в cache replay files
+- UI работает как desktop control panel, но long-running actions пока запускаются через дочерний процесс без live-stream
 
-terio — агрегатор интерфейсов. В перспективе — любая программа, с которой можно обменяться действием и результатом (через CLI, API, логи или иной канал), может быть управляема из terio. В MVP — через CLI-инструменты, чьи команды можно безопасно спланировать, подтвердить, выполнить, отрендерить и закешировать.
+## Текущее состояние
 
-## Как это работает
+Репозиторий уже содержит рабочий baseline для:
 
-1. Вы вводите запрос в окно terio: `terio ask "нарежь flac/cue на треки"`.
-2. terio генерирует `interaction_id` и проверяет: **такой запрос уже был?** Если да — выполняет готовый скрипт без модели.
-3. Если запрос новый — AI-модель (локальная или удалённая) строит цепочку команд.
-4. terio показывает план, вы подтверждаете. Команды выполняются, результат рендерится.
-5. Все шаги пишутся в лог с cost_counters. Renderer читает из лога и показывает в окне.
-6. Цепочка сохраняется как скрипт. В следующий раз тот же запрос — скрипт без модели.
+- mock agent
+- cache
+- trust/security
+- OpenAI provider abstraction
+- Dioxus UI с ask/pending/config
+- CI: `fmt`, `clippy -D warnings`, `build`, `test`
 
-**Scope расширяется лениво** — в процессе вашей обычной работы. Вы просто работаете, terio запоминает.
+Тестов в текущем дереве: `94`.
 
-## Что terio снижает
+## Основные команды
 
-1. **Стоимость внимания.** Все программы с CLI или API управляются из одной точки. Никаких переключений.
-2. **Стоимость LLM.** Каждый повторяющийся запрос — это скрипт, а не токены.
-3. **Стоимость системы.** terio считает, сколько времени и ресурсов потрачено и сколько сэкономлено кешированием.
-
-## Логирование и приватность
-
-terio логирует запросы пользователя, выполненные команды и метаданные исполнения с автоматической редэкцией секретов (токены, ключи, пароли). Лог хранится локально.
-
-Каждая запись лога содержит:
-- **display_profile** — как показывать запись (тип, видимость, подсказка для renderer).
-- **cost_counters** — сырые счётчики расходов (observation, LLM, execution, cache, storage).
-
-Пользователь настраивает отображаемость каждого типа записей через `terio config`.
-
-**Счётчики (MVP):** model_calls, cache_hits, tokens_consumed, commands_executed, failure_count, duration_total, cost_counters.
-
-## Статус
-
-**Phase 1 / MVP in progress.** В репозитории:
-- ✅ Rust/Dioxus scaffold, CI (fmt + clippy + build + test)
-- ✅ `terio run -- <command>` — shell-команды с захватом stdout/stderr/exit/duration
-- ✅ Identity: instance_id (ULID) + session_id (UUID)
-- ✅ JSONL лог (LogWriter/LogReader traits + JsonlLogWriter + JsonlLogReader + LogStore)
-- ✅ Accounting: cost_counters (5 групп), aggregate, compute_attention_cost (stub)
-- ✅ display_profile: type / renderer_hint / user_visible
-- ✅ `terio log --json` — история в JSON
-- ✅ 17 тестов (CI, identity, run, log, accounting)
-- ❌ Dioxus desktop UI — scaffold есть, требует feature `desktop` (GTK3/webkit2gtk на Linux)
-- ❌ Agent / cache / trust — Phase 2+
-
-## Стек
-
-**Rust.** UI-first (Dioxus webview). CLI-команды для автоматизации и обратной совместимости.
+```bash
+terio ask "list files"
+terio confirm
+terio run -- echo hello
+terio log --json
+terio stats
+terio config show
+```
 
 ## Документы
 
-- [MVP](docs/mvp.md) — scope первого прототипа.
-- [Architecture](architecture.md) — компоненты и data flow.
-- [Roadmap](roadmap.md) — фазы развития.
-- [Agent Protocol](docs/agent-protocol.md) — контракт с AI-моделью.
-- [Trust Model](docs/trust-model.md) — доверие, безопасность.
-- [Script Cache](docs/script-cache.md) — схема кеша скриптов.
-- [Behavior Log](docs/behavior-log.md) — схема лога.
+- [MVP](docs/mvp.md)
+- [Architecture](architecture.md)
+- [Roadmap](roadmap.md)
+- [Agent Protocol](docs/agent-protocol.md)
+- [Trust Model](docs/trust-model.md)
+- [Script Cache](docs/script-cache.md)
+- [Behavior Log](docs/behavior-log.md)

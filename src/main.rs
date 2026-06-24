@@ -63,6 +63,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        Some(Command::Confirm) => {
+            handle_confirm(&identity, &log_dir)?;
+        }
+
         Some(Command::Config(cmd)) => {
             let mut config = Config::load().unwrap_or_default();
             match cmd {
@@ -172,7 +176,34 @@ fn handle_ask(
 
     let provider = create_provider(&config.provider);
 
-    match ask::process_request(request, identity, &store, &cache, &*provider, yes)? {
+    render_ask_result(
+        ask::process_request(request, identity, &store, &cache, &*provider, yes)?,
+        &store,
+        request,
+    )?;
+
+    store.flush()?;
+    Ok(())
+}
+
+fn handle_confirm(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Result<()> {
+    let cache = ScriptCache::new()?;
+    let writer = Box::new(JsonlLogWriter::new(log_dir)?);
+    let reader = Box::new(JsonlLogReader::new(log_dir));
+    let store = LogStore::new(writer, reader, 256);
+
+    render_ask_result(
+        ask::confirm_pending(identity, &store, &cache)?,
+        &store,
+        "<pending>",
+    )?;
+
+    store.flush()?;
+    Ok(())
+}
+
+fn render_ask_result(result: AskResult, store: &LogStore, request: &str) -> anyhow::Result<()> {
+    match result {
         AskResult::CacheHit {
             entry,
             results,
@@ -228,11 +259,15 @@ fn handle_ask(
         AskResult::PendingConfirmation {
             source,
             plan_summary,
+            execution,
         } => {
-            let _ = ask::save_pending_confirmation(&ask::PendingConfirmationState {
-                source: source.clone(),
-                plan_summary: plan_summary.clone(),
-            });
+            let _ = ask::save_pending_confirmation(
+                &ask::PendingConfirmationState {
+                    source: source.clone(),
+                    plan_summary: plan_summary.clone(),
+                },
+                &execution,
+            );
             eprintln!(
                 "[pending {:?}] {} (risk: {:?})",
                 source, plan_summary.summary, plan_summary.risk
@@ -243,15 +278,15 @@ fn handle_ask(
             if let Some(trust) = &plan_summary.trust {
                 eprintln!("   trust: {} [{}]", trust.trust_label, trust.reason);
             }
-            eprintln!("terio: требуется подтверждение. Повторите с --yes для выполнения.");
+            eprintln!("terio: требуется подтверждение. Выполните `terio confirm`.");
         }
         AskResult::Declined => {
             let _ = ask::clear_pending_confirmation();
             eprintln!("terio: отменено пользователем.");
         }
     }
-
-    store.flush()?;
+    let _ = request;
+    let _ = store;
     Ok(())
 }
 

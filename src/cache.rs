@@ -1,6 +1,7 @@
 // Script Cache: хранение и поиск кешированных цепочек команд.
 
 use crate::matcher::{hash_normalized, normalize};
+use crate::redact::redact;
 use crate::types::RiskLevel;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,9 @@ impl ScriptCache {
         risk: RiskLevel,
         steps: Vec<CachedStep>,
     ) -> Result<CacheEntry> {
+        if Self::contains_sensitive_data(request, &steps) {
+            anyhow::bail!("refusing to cache sensitive request or steps");
+        }
         let normalized = normalize(request);
         let hash = hash_normalized(&normalized);
         let path = self.dir.join(format!("{}.json", hash));
@@ -148,6 +152,15 @@ impl ScriptCache {
     /// Проверяет, можно ли auto-run (делегирует в trust).
     pub fn can_auto_run(entry: &CacheEntry) -> bool {
         crate::trust::can_auto_run(entry)
+    }
+
+    pub fn contains_sensitive_data(request: &str, steps: &[CachedStep]) -> bool {
+        if redact(request) != request {
+            return true;
+        }
+        steps.iter().any(|step| {
+            redact(&step.command) != step.command || step.argv.iter().any(|arg| redact(arg) != *arg)
+        })
     }
 }
 
@@ -275,5 +288,51 @@ mod tests {
 
         entry.risk = RiskLevel::Destructive;
         assert!(!ScriptCache::can_auto_run(&entry));
+    }
+
+    #[test]
+    fn test_cache_save_rejects_sensitive_steps() {
+        let dir = TempDir::new().unwrap();
+        let cache = ScriptCache {
+            dir: dir.path().to_path_buf(),
+        };
+
+        let steps = vec![CachedStep {
+            command: "curl".to_string(),
+            argv: vec![
+                "curl".to_string(),
+                "-H".to_string(),
+                "Authorization: Bearer secret123".to_string(),
+            ],
+            risk: RiskLevel::NetworkRead,
+        }];
+
+        assert!(cache
+            .save("fetch secret", RiskLevel::NetworkRead, steps)
+            .is_err());
+    }
+
+    #[test]
+    fn test_cache_entry_has_required_schema_fields() {
+        let dir = TempDir::new().unwrap();
+        let cache = ScriptCache {
+            dir: dir.path().to_path_buf(),
+        };
+
+        let steps = vec![CachedStep {
+            command: "ls".to_string(),
+            argv: vec!["ls".to_string(), "-l".to_string()],
+            risk: RiskLevel::ReadOnly,
+        }];
+
+        let saved = cache
+            .save("list files", RiskLevel::ReadOnly, steps)
+            .unwrap();
+        let instance = serde_json::to_value(saved).unwrap();
+        assert_eq!(instance["schema_version"], 1);
+        assert_eq!(instance["match_policy"], "exact_normalized");
+        assert_eq!(instance["scope"]["cwd_policy"], "same_cwd_only");
+        assert!(instance["steps"].is_array());
+        assert!(instance["created_at"].is_string());
     }
 }

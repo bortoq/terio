@@ -178,4 +178,28 @@ mod tests {
             .join(" ")
             .contains("[REDACTED]"));
     }
+
+    #[test]
+    fn test_command_run_entry_has_required_schema_fields() {
+        let entry = LogEntry::new_command_run(
+            "i1",
+            "s1",
+            Some("int1".into()),
+            "echo hello",
+            "/tmp",
+            &["echo".into(), "hello".into()],
+            0,
+            std::time::Duration::from_millis(1),
+            "hello",
+            "",
+            CostCounters::default(),
+        );
+
+        let instance = serde_json::to_value(entry).unwrap();
+        assert_eq!(instance["schema_version"], 1);
+        assert_eq!(instance["kind"], "command_run");
+        assert_eq!(instance["request"], "echo hello");
+        assert!(instance["cost_counters"].is_object());
+        assert!(instance["command"]["argv"].is_array());
+    }
 }

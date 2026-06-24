@@ -281,11 +281,7 @@ fn app() -> Element {
                         style: "display: flex; gap: 8px; margin-top: 10px;",
                         button {
                             onclick: move |_| {
-                                run_terio_args(&[
-                                    "ask".to_string(),
-                                    state.plan_summary.request.clone(),
-                                    "--yes".to_string(),
-                                ]);
+                                run_terio_args(&["confirm".to_string()]);
                                 let _ = clear_pending_confirmation();
                                 refresh_entries();
                                 pending.set(load_pending_confirmation().ok().flatten());

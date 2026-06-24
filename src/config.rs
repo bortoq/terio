@@ -94,7 +94,7 @@ impl Config {
             std::fs::create_dir_all(parent).context("failed to create .terio directory")?;
         }
         let json = serde_json::to_string_pretty(self).context("failed to serialize config")?;
-        std::fs::write(&path, json)
+        write_private_file(&path, &json)
             .with_context(|| format!("failed to write config: {}", path.display()))?;
         Ok(())
     }
@@ -195,6 +195,17 @@ fn parse_policy(value: &str) -> Result<TrustPolicy> {
     }
 }
 
+fn write_private_file(path: &std::path::Path, contents: &str) -> Result<()> {
+    std::fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +290,29 @@ mod tests {
             .insert("abc".to_string(), TrustPolicy::Allow);
         let rendered = config.render_for_display();
         assert!(rendered.contains("1 overrides"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_config_save_sets_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let config = Config::default();
+        config.save().unwrap();
+
+        let path = dir.path().join(".terio").join("config.json");
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 }

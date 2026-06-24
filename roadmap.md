@@ -62,15 +62,15 @@
 - [x] `terio config set provider.type openai/anthropic/ollama/mock`
 - [x] `terio config set provider.api_key`, `provider.model`, `provider.base_url`
 - [x] `terio config show` — маскирует API key
-- [x] OpenAI provider — вызывает Chat Completions API, парсит JSON-план
+- [x] OpenAI provider baseline — вызывает Chat Completions API, передаёт request/cwd/top-level files, парсит JSON-план
 - [x] Provider trait: plan(&self, request) → AgentPlan
 - [x] MockProvider — обёртка над существующим get_mock_plan
 - [x] create_provider(config) — фабрика по типу провайдера
-- [x] План → подтверждение (y/N) → выполнение для risk >= destructive
+- [x] План → pending confirmation → exact saved execution через `terio confirm`
 - [x] Secrets redact перед отправкой в модель
 - [x] `terio cancel` — отправляет SIGTERM активному процессу
 - [x] Ctrl+C — перехватывает SIGINT, убивает процесс, чисто завершается
-- [x] Поле ввода + кнопка Ask в Dioxus UI (spawn `terio ask --yes`)
+- [x] Поле ввода + кнопка Ask в Dioxus UI
 
 ---
 
@@ -83,6 +83,7 @@
 - [x] Отображение подтверждения плана в UI (risk, команды, accept/decline)
 - [x] Индикатор trust level для каждой команды в UI
 - [x] Настройки в UI — окно конфигурации
+- [ ] Hash-bound confirmation для exact plan preview/approval
 
 ---
 

@@ -47,6 +47,9 @@ pub enum Command {
     /// Отменить текущую операцию
     Cancel,
 
+    /// Выполнить ранее подтверждённый сохранённый план без повторного запроса к provider
+    Confirm,
+
     /// Управление настройками
     #[command(subcommand)]
     Config(ConfigCmd),

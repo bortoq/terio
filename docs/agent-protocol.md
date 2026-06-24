@@ -1,144 +1,68 @@
-# Agent Protocol (MVP)
+# Agent Protocol
 
-## Purpose
+Этот документ описывает **текущую baseline-реализацию** и отдельно отмечает целевой, но ещё не реализованный контракт.
 
-Формализовать контракт между terio и AI-моделью: вход, выход, валидация.
+## Сейчас реализовано
 
-## Input (от terio к модели)
+### Input в real provider
 
-```json
-{
-  "request": "list files in current directory",
-  "interaction_id": "uuid",
-  "cwd": "/home/user/projects/terio",
-  "files": ["README.md", "architecture.md", "src/", "docs/"],
-  "allowed_risks": ["read_only", "local_write"],
-  "os": "linux",
-  "shell": "bash"
-}
-```
+OpenAI provider сейчас отправляет модели:
 
-**Правила:**
-- `interaction_id` — UUID запроса пользователя. Все последующие записи в логе получают этот ID.
-- `files` — только имена. Содержимое не отправляется (защита от prompt injection).
-- `allowed_risks` — terio сообщает модели, какие риски допустимы. Модель не может их расширить.
-- Secrets/Credentials никогда не попадают в input.
+- redacted `request`
+- текущий `cwd`
+- список top-level entries текущей директории
 
-## Output (от модели к terio)
+Содержимое файлов не отправляется.
+
+### Output от provider
+
+Сейчас terio ожидает только:
 
 ```json
 {
-  "summary": "List files using ls with details",
+  "summary": "List files using ls -la",
   "risk": "read_only",
   "commands": [
     {
       "command": "ls",
-      "argv": ["ls", "-l"],
+      "argv": ["ls", "-la"],
       "risk": "read_only",
-      "reason": "Shows detailed file listing suitable for table rendering"
+      "reason": "Detailed listing"
     }
-  ],
-  "expected_output": "file listing with permissions, size, date, name",
-  "cache_template": {
-    "parameters": {
-      "dir": {"source": "default", "value": "."},
-      "flags": {"source": "default", "value": "-l"}
-    },
-    "preconditions": [
-      {"binary_exists": "ls"}
-    ],
-    "steps": [
-      {
-        "command": "ls",
-        "argv": ["ls", "${flags}", "${dir}"],
-        "risk": "read_only",
-        "description": "List files with given flags in given directory"
-      }
-    ],
-    "artifacts": []
-  }
+  ]
 }
 ```
 
-**Правила:**
-- `commands` — массив structured команд (command + argv). Immediate execution plan.
-- `cache_template.steps` — replay template для Script Cache. Если передан, terio использует его как шаги кеша. Если нет — terio сохраняет `commands` как фиксированный plan (Option B).
-- `cache_template` — опциональный. Если передан, terio валидирует и использует для Script Cache.
-- `risk` per command — рекомендательный. terio вычисляет финальный.
-- `reason` — объяснение для confirmation UI.
+### Runtime validation
 
-## Validation (terio проверяет выход модели)
+Перед execution terio дополнительно проверяет:
 
-1. JSON валиден, поля присутствуют.
-2. `command` в known_commands (см. Known Commands ниже).
-3. `argv` — массив строк, не пустой.
-4. `risk` не ниже минимального для данной команды (см. Risk Rules ниже).
-5. Shell injection: argv не конкатенируется, каждый аргумент отдельно.
-6. `cache_template` (если есть): parameters валидны, preconditions выполнимы, steps соответствуют commands, risk совпадает с общим.
+- `argv` не пустой
+- `command == argv[0]`
+- risk пересчитывается локально по `argv[0]` и аргументам
+- unknown commands не auto-run
+- path boundary и scope не обходятся через `--yes`
 
-## Risk Rules (по command + argv)
+### Confirmation
 
-Безопасность зависит не только от command, но и от argv:
+Если plan требует подтверждения, terio:
 
-| Команда | Опасные argv | Правильный risk |
-|---------|-------------|-----------------|
-| `cat` | `~/.ssh/id_rsa`, `.env`, токены | `credential_access` |
-| `curl` | `-X POST`, `-d`, `--data` | `network_write` |
-| `curl` | любой URL | `network_read` |
-| `curl` | `file://`, `localhost`, `127.0.0.1` | `local_write` (может читать локальные файлы) |
-| `git push` | любой | `network_write` |
-| `git clean`, `git reset --hard` | любой | `destructive` |
-| `cp` | в `/etc/`, `/usr/` | `destructive` |
-| `ffmpeg` | `-i http://...` | `network_read` |
-| `rm`, `mv` | любой | `destructive` |
-| `sudo` | любой | `destructive` (повышенный) |
-| `find` | `-delete`, `-exec` | `destructive` |
+1. сохраняет redacted preview в `~/.terio/pending-plan.json`
+2. сохраняет exact execution state в `~/.terio/pending-exec.json`
+3. выполняет подтверждённый plan только через `terio confirm`
 
-Финальный risk = `max(model.risk, terio.computed_risk(command, argv))`.
+Это значит, что UI/CLI confirmation больше не вызывает provider повторно для уже подтверждённого action.
 
-Пример:
-- Модель: `{"command": "rm", "argv": ["rm", "-rf", "/tmp/x"], "risk": "read_only"}`
-- terio.computed_risk("rm", ["rm", "-rf", "/tmp/x"]) = `destructive`
-- Финальный: `max("read_only", "destructive")` = `destructive`
+## Ещё не реализовано
 
-## Known Commands (MVP)
+Следующие части остаются целевыми, но не реализованы полностью:
 
-Известные terio команды. **Known ≠ Safe.** Каждая команда классифицируется по Risk Rules (см. выше). Команды вне этого списка требуют дополнительного подтверждения и блокируются для auto-run.
+- `cache_template`
+- strict JSON mode / schema-bound provider response
+- usage-token accounting из ответа provider
+- hash-bound approval of preview vs exact execution payload
+- richer provider context beyond `cwd` и top-level entries
 
-```
-ls, cat, mkdir, cp, mv, rm, ffmpeg, git, curl, wget, mpv, rsync, docker,
-gh, echo, printf, shasum, find, grep, awk, sort, uniq, head, tail, wc,
-date, pwd, which
-```
+## Known Commands
 
-Для early MVP можно использовать narrower список:
-```
-ls, pwd, echo, printf, cat (non-sensitive paths), find (read-only flags),
-grep, head, tail, wc, which, date
-```
-
-Остальные — confirm/block.
-
-## Confirmation UI
-
-Для каждого запроса:
-
-```
- terio plan
-  1. ls -l  (read_only)
-  Risk: read_only
-  Proceed? [Y/n]
-```
-
-Для destructive:
-
-```
- terio plan
-  1. rm -rf /tmp/x  (destructive)
-  ⚠ This action is destructive.
-  Are you sure? [y/N]
-```
-
-## JSON Schema
-
-Machine-readable schema: [docs/schemas/agent-output.schema.json](../docs/schemas/agent-output.schema.json)
+Known command list задаётся локально в `run::is_known_command()`. Known не означает safe: final risk всё равно вычисляется локально.

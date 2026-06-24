@@ -71,6 +71,10 @@ impl OpenAiProvider {
 impl Provider for OpenAiProvider {
     fn plan(&self, request: &str) -> Result<AgentPlan> {
         let redacted = redact(request);
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+        let files = top_level_entries().unwrap_or_default().join(", ");
         let prompt = format!(
             r#"You are a CLI assistant. Given a user request, output a JSON plan with commands to execute.
 
@@ -83,6 +87,8 @@ Rules:
 Example:
 {{"summary": "List files in current directory", "risk": "read_only", "commands": [{{"command": "ls", "argv": ["ls", "-la"], "risk": "read_only", "reason": "List files with details"}}]}}
 
+Current working directory: {cwd}
+Top-level entries: {files}
 User request: {redacted}
 "#
         );
@@ -134,6 +140,20 @@ User request: {redacted}
             commands,
         })
     }
+}
+
+fn top_level_entries() -> Result<Vec<String>> {
+    let cwd = std::env::current_dir()?;
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(cwd)? {
+        let entry = entry?;
+        entries.push(entry.file_name().to_string_lossy().to_string());
+        if entries.len() >= 32 {
+            break;
+        }
+    }
+    entries.sort();
+    Ok(entries)
 }
 
 /// Parse risk string from LLM response.
