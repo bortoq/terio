@@ -90,6 +90,18 @@ impl ScriptCache {
         risk: RiskLevel,
         steps: Vec<CachedStep>,
     ) -> Result<CacheEntry> {
+        self.save_with_template(request, risk, serde_json::json!({}), vec![], steps, vec![])
+    }
+
+    pub fn save_with_template(
+        &self,
+        request: &str,
+        risk: RiskLevel,
+        parameters: serde_json::Value,
+        preconditions: Vec<serde_json::Value>,
+        steps: Vec<CachedStep>,
+        artifacts: Vec<serde_json::Value>,
+    ) -> Result<CacheEntry> {
         if Self::contains_sensitive_data(request, &steps) {
             anyhow::bail!("refusing to cache sensitive request or steps");
         }
@@ -115,10 +127,10 @@ impl ScriptCache {
                 cwd,
             },
             risk,
-            parameters: serde_json::json!({}),
-            preconditions: vec![],
+            parameters,
+            preconditions,
             steps,
-            artifacts: vec![],
+            artifacts,
             success_count: 1,
             trust_threshold: 3,
             created_at: now.clone(),
@@ -334,5 +346,39 @@ mod tests {
         assert_eq!(instance["scope"]["cwd_policy"], "same_cwd_only");
         assert!(instance["steps"].is_array());
         assert!(instance["created_at"].is_string());
+    }
+
+    #[test]
+    fn test_save_with_template_persists_template_metadata() {
+        let dir = TempDir::new().unwrap();
+        let cache = ScriptCache {
+            dir: dir.path().to_path_buf(),
+        };
+
+        let steps = vec![CachedStep {
+            command: "find".to_string(),
+            argv: vec![
+                "find".to_string(),
+                ".".to_string(),
+                "-maxdepth".to_string(),
+                "1".to_string(),
+            ],
+            risk: RiskLevel::ReadOnly,
+        }];
+
+        let saved = cache
+            .save_with_template(
+                "find files",
+                RiskLevel::ReadOnly,
+                serde_json::json!({ "root": "." }),
+                vec![serde_json::json!({ "cwd_exists": true })],
+                steps,
+                vec![serde_json::json!({ "kind": "listing" })],
+            )
+            .unwrap();
+
+        assert_eq!(saved.parameters["root"], ".");
+        assert_eq!(saved.preconditions.len(), 1);
+        assert_eq!(saved.artifacts.len(), 1);
     }
 }

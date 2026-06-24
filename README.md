@@ -17,10 +17,11 @@ terio принимает естественный запрос, строит str
 
 ## Ограничения текущего прототипа
 
-- OpenAI provider пока experimental: строгий JSON mode, `cache_template` и usage-token accounting ещё не реализованы
-- API key и exact pending execution state хранятся локально на диске; на Unix файлы пишутся с правами `0600`
+- OpenAI provider остаётся experimental: JSON mode включён, но контракт держится на `serde` + runtime invariants, а не на внешнем schema engine
+- API key и exact pending execution state хранятся локально на диске в plaintext; на Unix файлы пишутся с правами `0600`, но это не защищает от локального компромета хоста или пользователя
 - Sensitive commands/arguments не попадают в cache replay files
-- UI работает как desktop control panel, но long-running actions пока запускаются через дочерний процесс без live-stream
+- Pending preview и exact execution payload hash-bound: `terio confirm` выполнит только тот payload, который соответствует сохранённому preview
+- UI работает как desktop control panel: actions запускаются non-blocking, но live-stream stdout/stderr пока нет
 
 ## Текущее состояние
 
@@ -33,7 +34,7 @@ terio принимает естественный запрос, строит str
 - Dioxus UI с ask/pending/config
 - CI: `fmt`, `clippy -D warnings`, `build`, `test`
 
-Тестов в текущем дереве: `94`.
+Тестов в текущем дереве: смотрите `cargo test` для актуального числа.
 
 ## Основные команды
 

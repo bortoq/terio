@@ -61,6 +61,8 @@ struct RowData {
     exit: String,
     risk: String,
     trust: String,
+    stdout: String,
+    stderr: String,
 }
 
 fn prepare_rows(entries: &[LogEntry]) -> Vec<RowData> {
@@ -83,6 +85,8 @@ fn prepare_rows(entries: &[LogEntry]) -> Vec<RowData> {
             let exit = entry.exit.map(|e| e.to_string()).unwrap_or_default();
             let risk = risk_label(entry);
             let trust = trust_badge(entry);
+            let stdout = entry.stdout_summary.clone().unwrap_or_default();
+            let stderr = entry.stderr_summary.clone().unwrap_or_default();
             RowData {
                 key: format!("{}-{}", entry.ts, entry.session_id),
                 ts,
@@ -94,6 +98,8 @@ fn prepare_rows(entries: &[LogEntry]) -> Vec<RowData> {
                 exit,
                 risk,
                 trust,
+                stdout,
+                stderr,
             }
         })
         .collect()
@@ -137,13 +143,16 @@ fn refresh_entries() {
 
 fn run_terio_args(args: &[String]) {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("terio"));
-    let _ = std::process::Command::new(exe)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut c| c.wait());
+    let args = args.to_vec();
+    let _ = std::thread::spawn(move || {
+        let _ = std::process::Command::new(exe)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| c.wait());
+    });
 }
 
 fn app() -> Element {
@@ -155,6 +164,7 @@ fn app() -> Element {
 
     let mut input_text = use_signal(String::new);
     let mut pending = use_signal(|| load_pending_confirmation().ok().flatten());
+    let mut selected = use_signal(|| None::<String>);
     let initial_config = Config::load().unwrap_or_default();
     let mut show_config = use_signal(|| initial_config.ui.show_config);
     let mut config_text = use_signal(|| initial_config.render_for_display());
@@ -164,10 +174,6 @@ fn app() -> Element {
         let val = val.trim().to_string();
         if !val.is_empty() {
             run_terio_args(&["ask".to_string(), val.clone()]);
-            refresh_entries();
-            pending.set(load_pending_confirmation().ok().flatten());
-            config_text.set(Config::load().unwrap_or_default().render_for_display());
-            refresh_tick += 1;
         }
         input_text.set(String::new());
     };
@@ -282,10 +288,6 @@ fn app() -> Element {
                         button {
                             onclick: move |_| {
                                 run_terio_args(&["confirm".to_string()]);
-                                let _ = clear_pending_confirmation();
-                                refresh_entries();
-                                pending.set(load_pending_confirmation().ok().flatten());
-                                refresh_tick += 1;
                             },
                             style: "
                                 background: #0e639c; border: none; color: white;
@@ -304,6 +306,48 @@ fn app() -> Element {
                                 padding: 5px 12px; border-radius: 4px; cursor: pointer;
                             ",
                             "Decline"
+                        }
+                    }
+                }
+            }
+            if let Some(key) = selected() {
+                if let Some(row) = rows.iter().find(|r| r.key == key) {
+                    div {
+                        style: "
+                            margin: 0 12px 12px 12px;
+                            padding: 12px;
+                            border: 1px solid #333;
+                            background: #252526;
+                            border-radius: 6px;
+                        ",
+                        div { style: "font-size: 12px; color: #888; text-transform: uppercase;", "Details" }
+                        div { style: "margin-top: 8px; color: #888;", "stdout" }
+                        pre {
+                            style: "
+                                margin: 4px 0 0 0;
+                                padding: 10px;
+                                border-radius: 4px;
+                                border: 1px solid #333;
+                                background: #1e1e1e;
+                                color: #d4d4d4;
+                                white-space: pre-wrap;
+                                overflow-x: auto;
+                            ",
+                            if row.stdout.is_empty() { "—" } else { "{row.stdout}" }
+                        }
+                        div { style: "margin-top: 10px; color: #888;", "stderr" }
+                        pre {
+                            style: "
+                                margin: 4px 0 0 0;
+                                padding: 10px;
+                                border-radius: 4px;
+                                border: 1px solid #333;
+                                background: #1e1e1e;
+                                color: #d4d4d4;
+                                white-space: pre-wrap;
+                                overflow-x: auto;
+                            ",
+                            if row.stderr.is_empty() { "—" } else { "{row.stderr}" }
                         }
                     }
                 }
@@ -400,6 +444,10 @@ fn app() -> Element {
                     for row in rows {
                         div {
                             key: "{row.key}",
+                            onclick: {
+                                let key = row.key.clone();
+                                move |_| selected.set(Some(key.clone()))
+                            },
                             style: "
                                 display: grid;
                                 grid-template-columns: 160px 100px 80px 1fr 60px 80px 90px;
@@ -490,5 +538,27 @@ mod tests {
         };
 
         assert_eq!(trust_badge(&entry), "auto ✓ 3/3");
+    }
+
+    #[test]
+    fn test_prepare_rows_includes_stdout_and_stderr_details() {
+        let mut entry = LogEntry::new_command_run(
+            "i1",
+            "s1",
+            Some("int1".into()),
+            "echo hello",
+            "/tmp",
+            &["echo".into(), "hello".into()],
+            0,
+            std::time::Duration::from_millis(1),
+            "hello",
+            "warn",
+            CostCounters::default(),
+        );
+        entry.stdout_summary = Some("hello".into());
+        entry.stderr_summary = Some("warn".into());
+        let rows = prepare_rows(&[entry]);
+        assert_eq!(rows[0].stdout, "hello");
+        assert_eq!(rows[0].stderr, "warn");
     }
 }

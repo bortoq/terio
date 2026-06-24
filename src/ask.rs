@@ -12,6 +12,7 @@ use crate::trust::{evaluate_cache_entry, trust_level_str, validate_step_paths, T
 use crate::types::*;
 use anyhow::{bail, Result};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 /// Результат обработки запроса.
@@ -40,6 +41,7 @@ pub struct PendingPlanSummary {
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct PendingConfirmationState {
+    pub plan_hash: String,
     pub source: PendingSource,
     pub plan_summary: PendingPlanSummary,
 }
@@ -56,6 +58,7 @@ pub enum PendingExecutionPayload {
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct PendingExecutionState {
+    pub plan_hash: String,
     pub request: String,
     pub payload: PendingExecutionPayload,
 }
@@ -77,6 +80,7 @@ pub enum AskResult {
         plan: AgentPlan,
     },
     PendingConfirmation {
+        plan_hash: String,
         source: PendingSource,
         plan_summary: PendingPlanSummary,
         execution: PendingExecutionState,
@@ -108,8 +112,10 @@ pub fn process_request(
         if !skip_confirm && evaluation.requires_confirmation {
             return Ok(AskResult::PendingConfirmation {
                 source: PendingSource::Cache,
+                plan_hash: execution_hash_for_cache(&entry),
                 plan_summary: pending_summary_from_cache(request, &entry, evaluation),
                 execution: PendingExecutionState {
+                    plan_hash: execution_hash_for_cache(&entry),
                     request: request.to_string(),
                     payload: PendingExecutionPayload::Cache {
                         entry: Box::new(entry),
@@ -177,8 +183,10 @@ pub fn process_request(
     if has_unknown_commands || (!skip_confirm && requires_confirmation) {
         return Ok(AskResult::PendingConfirmation {
             source: PendingSource::Agent,
+            plan_hash: execution_hash_for_plan(request, &plan),
             plan_summary: pending_summary_from_plan(request, &plan),
             execution: PendingExecutionState {
+                plan_hash: execution_hash_for_plan(request, &plan),
                 request: request.to_string(),
                 payload: PendingExecutionPayload::Agent {
                     plan: Box::new(plan.clone()),
@@ -192,7 +200,7 @@ pub fn process_request(
 
     // 5. Сохраняем в кеш только если все команды успешны
     let entry = if all_exit_zero && !ScriptCache::contains_sensitive_data(request, &steps) {
-        Some(cache.save(request, plan.risk.clone(), steps)?)
+        Some(save_plan_to_cache(cache, request, &plan, steps)?)
     } else {
         None
     };
@@ -313,6 +321,31 @@ fn recompute_plan_safety(mut plan: AgentPlan) -> Result<(AgentPlan, bool)> {
         }
     }
 
+    if let Some(template) = &mut plan.cache_template {
+        if template.steps.is_empty() {
+            bail!("cache_template must contain at least one step");
+        }
+        for step in &mut template.steps {
+            let executable = step
+                .argv
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("cache_template step returned empty argv"))?;
+            if executable != &step.command {
+                bail!("cache_template command/argv mismatch");
+            }
+            if !run::is_known_command(executable) {
+                has_unknown_commands = true;
+            }
+            let computed = run::compute_risk(executable, &step.argv[1..]);
+            if risk_rank(&computed) > risk_rank(&step.risk) {
+                step.risk = computed;
+            }
+            if risk_rank(&step.risk) > risk_rank(&overall_risk) {
+                overall_risk = step.risk.clone();
+            }
+        }
+    }
+
     if risk_rank(&overall_risk) > risk_rank(&plan.risk) {
         plan.risk = overall_risk;
     }
@@ -350,6 +383,12 @@ pub fn save_pending_confirmation(
     state: &PendingConfirmationState,
     execution: &PendingExecutionState,
 ) -> Result<()> {
+    if state.plan_hash != execution.plan_hash {
+        bail!("preview hash does not match execution hash");
+    }
+    if pending_execution_contains_sensitive_data(execution) {
+        bail!("refusing to persist sensitive pending execution payload");
+    }
     let path = pending_state_path()?;
     let exec_path = pending_exec_path()?;
     if let Some(parent) = path.parent() {
@@ -373,7 +412,11 @@ pub fn load_pending_confirmation() -> Result<Option<PendingConfirmationState>> {
         return Ok(None);
     }
     let content = std::fs::read_to_string(&path)?;
-    Ok(Some(serde_json::from_str(&content)?))
+    let state: PendingConfirmationState = serde_json::from_str(&content)?;
+    if state.plan_hash.is_empty() {
+        bail!("pending preview missing plan hash");
+    }
+    Ok(Some(state))
 }
 
 pub fn clear_pending_confirmation() -> Result<()> {
@@ -399,6 +442,12 @@ pub fn confirm_pending(
     }
     let content = std::fs::read_to_string(&path)?;
     let state: PendingExecutionState = serde_json::from_str(&content)?;
+    let preview =
+        load_pending_confirmation()?.ok_or_else(|| anyhow::anyhow!("missing pending preview"))?;
+    if preview.plan_hash != state.plan_hash {
+        clear_pending_confirmation()?;
+        return Ok(AskResult::Declined);
+    }
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
     let config = Config::load().unwrap_or_default();
 
@@ -450,7 +499,7 @@ pub fn confirm_pending(
                 let entry = if all_exit_zero
                     && !ScriptCache::contains_sensitive_data(&state.request, &steps)
                 {
-                    Some(cache.save(&state.request, plan.risk.clone(), steps)?)
+                    Some(save_plan_to_cache(cache, &state.request, &plan, steps)?)
                 } else {
                     None
                 };
@@ -502,6 +551,66 @@ fn write_private_file(path: &std::path::Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
+fn execution_hash_for_cache(entry: &crate::cache::CacheEntry) -> String {
+    hash_json(&serde_json::json!({
+        "kind": "cache",
+        "script_id": entry.script_id,
+        "request_hash": entry.request_hash,
+        "risk": entry.risk,
+        "steps": entry.steps,
+    }))
+}
+
+fn execution_hash_for_plan(request: &str, plan: &AgentPlan) -> String {
+    hash_json(&serde_json::json!({
+        "kind": "agent",
+        "request": request,
+        "summary": plan.summary,
+        "risk": plan.risk,
+        "commands": plan.commands,
+        "cache_template": plan.cache_template,
+    }))
+}
+
+fn hash_json(value: &serde_json::Value) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn pending_execution_contains_sensitive_data(execution: &PendingExecutionState) -> bool {
+    match &execution.payload {
+        PendingExecutionPayload::Cache { entry } => {
+            ScriptCache::contains_sensitive_data(&execution.request, &entry.steps)
+        }
+        PendingExecutionPayload::Agent { plan } => {
+            let steps = plan_to_steps(plan);
+            ScriptCache::contains_sensitive_data(&execution.request, &steps)
+        }
+    }
+}
+
+fn save_plan_to_cache(
+    cache: &ScriptCache,
+    request: &str,
+    plan: &AgentPlan,
+    steps: Vec<crate::cache::CachedStep>,
+) -> Result<crate::cache::CacheEntry> {
+    if let Some(template) = &plan.cache_template {
+        cache.save_with_template(
+            request,
+            plan.risk.clone(),
+            template.parameters.clone(),
+            template.preconditions.clone(),
+            steps,
+            template.artifacts.clone(),
+        )
+    } else {
+        cache.save(request, plan.risk.clone(), steps)
+    }
+}
+
 fn log_agent_turn(
     identity: &Identity,
     interaction_id: &str,
@@ -522,7 +631,13 @@ fn log_agent_turn(
         parent_interaction_id: None,
         kind: LogKind::AgentTurn,
         display_profile: DisplayProfile::default(),
-        cost_counters: CostCounters::default(),
+        cost_counters: CostCounters {
+            llm_cost: crate::types::LlmCost {
+                tokens: plan.tokens_used.unwrap_or(0),
+                duration_ms: 0,
+            },
+            ..CostCounters::default()
+        },
         request: Some(redact(request)),
         cwd: Some(redact(cwd)),
         risk: Some(plan.risk.clone()),
@@ -533,7 +648,7 @@ fn log_agent_turn(
         model_provider: Some(provider_name),
         model_name: Some(config.provider.model.clone().unwrap_or_default()),
         duration_ms: Some(0),
-        tokens_used: Some(0),
+        tokens_used: Some(plan.tokens_used.unwrap_or(0)),
         command: None,
         exit: None,
         stdout_summary: None,
@@ -935,6 +1050,8 @@ mod tests {
                 summary: "unused".into(),
                 risk: RiskLevel::ReadOnly,
                 commands: vec![],
+                cache_template: None,
+                tokens_used: None,
             },
         };
 
@@ -973,6 +1090,8 @@ mod tests {
                     risk: RiskLevel::LocalWrite,
                     reason: "Create a note".into(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         };
 
@@ -1028,6 +1147,8 @@ mod tests {
                 summary: "unused".into(),
                 risk: RiskLevel::ReadOnly,
                 commands: vec![],
+                cache_template: None,
+                tokens_used: None,
             },
         };
 
@@ -1069,6 +1190,8 @@ mod tests {
                     risk: RiskLevel::ReadOnly,
                     reason: "wrong risk".into(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         };
 
@@ -1114,6 +1237,8 @@ mod tests {
                     risk: RiskLevel::ReadOnly,
                     reason: "custom".into(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         };
 
@@ -1160,6 +1285,8 @@ mod tests {
                     risk: RiskLevel::ReadOnly,
                     reason: "bad".into(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         };
 
@@ -1199,6 +1326,8 @@ mod tests {
                     risk: RiskLevel::ReadOnly,
                     reason: "bad".into(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         };
 
@@ -1228,7 +1357,116 @@ mod tests {
         let store = LogStore::new(writer, reader, 16);
         let cache = ScriptCache::new()?;
 
+        let plan = AgentPlan {
+            summary: "Echo public".into(),
+            risk: RiskLevel::ReadOnly,
+            commands: vec![AgentCommand {
+                command: "echo".into(),
+                argv: vec!["echo".into(), "visible".into()],
+                risk: RiskLevel::ReadOnly,
+                reason: "exact".into(),
+            }],
+            cache_template: None,
+            tokens_used: None,
+        };
+        let plan_hash = execution_hash_for_plan("say visible", &plan);
         let preview = PendingConfirmationState {
+            plan_hash: plan_hash.clone(),
+            source: PendingSource::Agent,
+            plan_summary: PendingPlanSummary {
+                request: "say visible".into(),
+                summary: "Echo public".into(),
+                risk: RiskLevel::ReadOnly,
+                requires_confirmation: true,
+                trust: None,
+                commands: vec![PendingCommand {
+                    argv: vec!["echo".into(), "visible".into()],
+                    risk: RiskLevel::ReadOnly,
+                    reason: "preview".into(),
+                }],
+            },
+        };
+        let execution = PendingExecutionState {
+            plan_hash,
+            request: "say visible".into(),
+            payload: PendingExecutionPayload::Agent {
+                plan: Box::new(plan),
+            },
+        };
+
+        save_pending_confirmation(&preview, &execution)?;
+        let preview_loaded = load_pending_confirmation()?.unwrap();
+        assert_eq!(preview_loaded.plan_summary.commands[0].argv[1], "visible");
+
+        let result = confirm_pending(&identity, &store, &cache)?;
+        match result {
+            AskResult::FromAgent { results, .. } => {
+                assert_eq!(results[0].stdout.trim(), "visible");
+            }
+            _ => panic!("expected exact pending plan execution"),
+        }
+
+        if let Some(prev) = prev_home {
+            std::env::set_var("HOME", prev);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_save_pending_confirmation_rejects_hash_mismatch() {
+        let preview = PendingConfirmationState {
+            plan_hash: "preview-hash".into(),
+            source: PendingSource::Agent,
+            plan_summary: PendingPlanSummary {
+                request: "list files".into(),
+                summary: "List files".into(),
+                risk: RiskLevel::ReadOnly,
+                requires_confirmation: true,
+                trust: None,
+                commands: vec![],
+            },
+        };
+        let execution = PendingExecutionState {
+            plan_hash: "execution-hash".into(),
+            request: "list files".into(),
+            payload: PendingExecutionPayload::Agent {
+                plan: Box::new(AgentPlan {
+                    summary: "List files".into(),
+                    risk: RiskLevel::ReadOnly,
+                    commands: vec![AgentCommand {
+                        command: "pwd".into(),
+                        argv: vec!["pwd".into()],
+                        risk: RiskLevel::ReadOnly,
+                        reason: "safe".into(),
+                    }],
+                    cache_template: None,
+                    tokens_used: None,
+                }),
+            },
+        };
+
+        assert!(save_pending_confirmation(&preview, &execution).is_err());
+    }
+
+    #[test]
+    fn test_save_pending_confirmation_rejects_sensitive_payload() {
+        let plan = AgentPlan {
+            summary: "Echo secret".into(),
+            risk: RiskLevel::ReadOnly,
+            commands: vec![AgentCommand {
+                command: "echo".into(),
+                argv: vec!["echo".into(), "api_key=secret123".into()],
+                risk: RiskLevel::ReadOnly,
+                reason: "unsafe".into(),
+            }],
+            cache_template: None,
+            tokens_used: None,
+        };
+        let plan_hash = execution_hash_for_plan("say secret", &plan);
+        let preview = PendingConfirmationState {
+            plan_hash: plan_hash.clone(),
             source: PendingSource::Agent,
             plan_summary: PendingPlanSummary {
                 request: "say secret".into(),
@@ -1239,37 +1477,88 @@ mod tests {
                 commands: vec![PendingCommand {
                     argv: vec!["echo".into(), "api_key=secret123".into()],
                     risk: RiskLevel::ReadOnly,
+                    reason: "unsafe".into(),
+                }],
+            },
+        };
+        let execution = PendingExecutionState {
+            plan_hash,
+            request: "say secret".into(),
+            payload: PendingExecutionPayload::Agent {
+                plan: Box::new(plan),
+            },
+        };
+
+        assert!(save_pending_confirmation(&preview, &execution).is_err());
+    }
+
+    #[test]
+    fn test_confirm_pending_declines_hash_mismatch() -> Result<()> {
+        let _guard = crate::test_support::ENV_MUTEX.lock().unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        let identity = Identity::load_or_create()?;
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let writer = Box::new(JsonlLogWriter::new(&log_dir)?);
+        let reader = Box::new(JsonlLogReader::new(&log_dir));
+        let store = LogStore::new(writer, reader, 16);
+        let cache = ScriptCache::new()?;
+
+        let preview = PendingConfirmationState {
+            plan_hash: "preview-hash".into(),
+            source: PendingSource::Agent,
+            plan_summary: PendingPlanSummary {
+                request: "pwd".into(),
+                summary: "Pwd".into(),
+                risk: RiskLevel::ReadOnly,
+                requires_confirmation: true,
+                trust: None,
+                commands: vec![PendingCommand {
+                    argv: vec!["pwd".into()],
+                    risk: RiskLevel::ReadOnly,
                     reason: "preview".into(),
                 }],
             },
         };
         let execution = PendingExecutionState {
-            request: "say secret".into(),
+            plan_hash: "execution-hash".into(),
+            request: "pwd".into(),
             payload: PendingExecutionPayload::Agent {
                 plan: Box::new(AgentPlan {
-                    summary: "Echo secret".into(),
+                    summary: "Pwd".into(),
                     risk: RiskLevel::ReadOnly,
                     commands: vec![AgentCommand {
-                        command: "echo".into(),
-                        argv: vec!["echo".into(), "api_key=secret123".into()],
+                        command: "pwd".into(),
+                        argv: vec!["pwd".into()],
                         risk: RiskLevel::ReadOnly,
                         reason: "exact".into(),
                     }],
+                    cache_template: None,
+                    tokens_used: None,
                 }),
             },
         };
 
-        save_pending_confirmation(&preview, &execution)?;
-        let preview_loaded = load_pending_confirmation()?.unwrap();
-        assert!(preview_loaded.plan_summary.commands[0].argv[1].contains("[REDACTED]"));
+        let pending_dir = dir.path().join(".terio");
+        std::fs::create_dir_all(&pending_dir)?;
+        write_private_file(
+            &pending_state_path()?,
+            &serde_json::to_string_pretty(&preview)?,
+        )?;
+        write_private_file(
+            &pending_exec_path()?,
+            &serde_json::to_string_pretty(&execution)?,
+        )?;
 
-        let result = confirm_pending(&identity, &store, &cache)?;
-        match result {
-            AskResult::FromAgent { results, .. } => {
-                assert_eq!(results[0].stdout.trim(), "api_key=secret123");
-            }
-            _ => panic!("expected exact pending plan execution"),
-        }
+        assert!(matches!(
+            confirm_pending(&identity, &store, &cache)?,
+            AskResult::Declined
+        ));
+        assert!(load_pending_confirmation()?.is_none());
+        assert!(!pending_exec_path()?.exists());
 
         if let Some(prev) = prev_home {
             std::env::set_var("HOME", prev);

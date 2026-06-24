@@ -13,6 +13,8 @@ struct LlmPlanResponse {
     summary: String,
     risk: String,
     commands: Vec<LlmCommandResponse>,
+    #[serde(default)]
+    cache_template: Option<LlmCacheTemplateResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +23,25 @@ struct LlmCommandResponse {
     argv: Vec<String>,
     risk: String,
     reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LlmCacheTemplateResponse {
+    parameters: serde_json::Value,
+    preconditions: Vec<serde_json::Value>,
+    steps: Vec<LlmCacheStepResponse>,
+    artifacts: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LlmCacheStepResponse {
+    command: String,
+    argv: Vec<String>,
+    risk: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 /// Provider trait: generates a plan from a natural language request.
@@ -99,6 +120,7 @@ User request: {redacted}
             "messages": [
                 {"role": "user", "content": prompt}
             ],
+            "response_format": { "type": "json_object" },
             "temperature": 0.1,
             "max_tokens": 1000,
         });
@@ -122,6 +144,7 @@ User request: {redacted}
         let json_str = extract_json(content)?;
         let llm: LlmPlanResponse =
             serde_json::from_str(json_str).context("failed to parse LLM plan JSON")?;
+        validate_llm_plan_shape(&llm)?;
 
         let commands = llm
             .commands
@@ -134,12 +157,67 @@ User request: {redacted}
             })
             .collect();
 
+        let cache_template = llm
+            .cache_template
+            .map(|template| crate::agent::AgentCacheTemplate {
+                parameters: template.parameters,
+                preconditions: template.preconditions,
+                steps: template
+                    .steps
+                    .into_iter()
+                    .map(|step| crate::agent::AgentCacheStep {
+                        command: step.command,
+                        argv: step.argv,
+                        risk: parse_risk(&step.risk),
+                        description: step.description.or(step.reason),
+                    })
+                    .collect(),
+                artifacts: template.artifacts,
+            });
+        let tokens_used = value["usage"]["total_tokens"].as_u64();
+
         Ok(AgentPlan {
             summary: llm.summary,
             risk: parse_risk(&llm.risk),
             commands,
+            cache_template,
+            tokens_used,
         })
     }
+}
+
+fn validate_llm_plan_shape(plan: &LlmPlanResponse) -> Result<()> {
+    if plan.summary.trim().is_empty() {
+        anyhow::bail!("provider returned empty summary");
+    }
+    if plan.commands.is_empty() {
+        anyhow::bail!("provider returned empty commands");
+    }
+    for cmd in &plan.commands {
+        if cmd.command.trim().is_empty() {
+            anyhow::bail!("provider returned empty command name");
+        }
+        if cmd.reason.trim().is_empty() {
+            anyhow::bail!("provider returned empty command reason");
+        }
+        if cmd.argv.is_empty() || cmd.argv.iter().any(|arg| arg.is_empty()) {
+            anyhow::bail!("provider returned empty argv item");
+        }
+    }
+    if let Some(template) = &plan.cache_template {
+        if template.steps.is_empty() {
+            anyhow::bail!("provider returned empty cache_template steps");
+        }
+        for step in &template.steps {
+            if step.command.trim().is_empty() {
+                anyhow::bail!("provider returned empty cache_template command");
+            }
+            if step.argv.is_empty() || step.argv.iter().any(|arg| arg.is_empty()) {
+                anyhow::bail!("provider returned empty cache_template argv item");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn top_level_entries() -> Result<Vec<String>> {
@@ -251,6 +329,8 @@ mod tests {
             summary: "test".to_string(),
             risk: RiskLevel::ReadOnly,
             commands: vec![],
+            cache_template: None,
+            tokens_used: None,
         };
         assert!(!needs_confirmation(&plan));
 
@@ -258,6 +338,8 @@ mod tests {
             summary: "test".to_string(),
             risk: RiskLevel::Destructive,
             commands: vec![],
+            cache_template: None,
+            tokens_used: None,
         };
         assert!(needs_confirmation(&plan));
     }
@@ -273,5 +355,94 @@ mod tests {
     fn test_mock_provider_unknown() {
         let provider = MockProvider;
         assert!(provider.plan("unknown request never heard of").is_err());
+    }
+
+    #[test]
+    fn test_extract_usage_tokens() {
+        let value = serde_json::json!({
+            "usage": { "total_tokens": 321 }
+        });
+        assert_eq!(value["usage"]["total_tokens"].as_u64(), Some(321));
+    }
+
+    #[test]
+    fn test_validate_llm_plan_shape_accepts_cache_template() {
+        let plan = LlmPlanResponse {
+            summary: "List files".into(),
+            risk: "read_only".into(),
+            commands: vec![LlmCommandResponse {
+                command: "ls".into(),
+                argv: vec!["ls".into(), "-la".into()],
+                risk: "read_only".into(),
+                reason: "inspect directory".into(),
+            }],
+            cache_template: Some(LlmCacheTemplateResponse {
+                parameters: serde_json::json!({"path": "."}),
+                preconditions: vec![serde_json::json!({"cwd_exists": true})],
+                steps: vec![LlmCacheStepResponse {
+                    command: "ls".into(),
+                    argv: vec!["ls".into(), "-la".into()],
+                    risk: "read_only".into(),
+                    reason: None,
+                    description: Some("list current directory".into()),
+                }],
+                artifacts: vec![],
+            }),
+        };
+        assert!(validate_llm_plan_shape(&plan).is_ok());
+    }
+
+    #[test]
+    fn test_validate_llm_plan_shape_rejects_empty_summary() {
+        let plan = LlmPlanResponse {
+            summary: "   ".into(),
+            risk: "read_only".into(),
+            commands: vec![LlmCommandResponse {
+                command: "pwd".into(),
+                argv: vec!["pwd".into()],
+                risk: "read_only".into(),
+                reason: "show cwd".into(),
+            }],
+            cache_template: None,
+        };
+        assert!(validate_llm_plan_shape(&plan).is_err());
+    }
+
+    #[test]
+    fn test_validate_llm_plan_shape_rejects_empty_commands() {
+        let plan = LlmPlanResponse {
+            summary: "No commands".into(),
+            risk: "read_only".into(),
+            commands: vec![],
+            cache_template: None,
+        };
+        assert!(validate_llm_plan_shape(&plan).is_err());
+    }
+
+    #[test]
+    fn test_validate_llm_plan_shape_rejects_empty_cache_template_step_argv() {
+        let plan = LlmPlanResponse {
+            summary: "Bad cache template".into(),
+            risk: "read_only".into(),
+            commands: vec![LlmCommandResponse {
+                command: "pwd".into(),
+                argv: vec!["pwd".into()],
+                risk: "read_only".into(),
+                reason: "show cwd".into(),
+            }],
+            cache_template: Some(LlmCacheTemplateResponse {
+                parameters: serde_json::json!({}),
+                preconditions: vec![],
+                steps: vec![LlmCacheStepResponse {
+                    command: "pwd".into(),
+                    argv: vec![],
+                    risk: "read_only".into(),
+                    reason: None,
+                    description: None,
+                }],
+                artifacts: vec![],
+            }),
+        };
+        assert!(validate_llm_plan_shape(&plan).is_err());
     }
 }

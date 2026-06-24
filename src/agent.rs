@@ -4,12 +4,33 @@ use crate::cache::CachedStep;
 use crate::types::RiskLevel;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCacheStep {
+    pub command: String,
+    pub argv: Vec<String>,
+    pub risk: RiskLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCacheTemplate {
+    pub parameters: serde_json::Value,
+    pub preconditions: Vec<serde_json::Value>,
+    pub steps: Vec<AgentCacheStep>,
+    pub artifacts: Vec<serde_json::Value>,
+}
+
 /// План от agent (соответствует schema).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPlan {
     pub summary: String,
     pub risk: RiskLevel,
     pub commands: Vec<AgentCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_template: Option<AgentCacheTemplate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_used: Option<u64>,
 }
 
 /// Одна команда в плане.
@@ -35,6 +56,8 @@ fn mock_responses() -> Vec<(&'static str, AgentPlan)> {
                     risk: RiskLevel::ReadOnly,
                     reason: "Shows detailed file listing".to_string(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         ),
         (
@@ -48,6 +71,8 @@ fn mock_responses() -> Vec<(&'static str, AgentPlan)> {
                     risk: RiskLevel::ReadOnly,
                     reason: "Prints current working directory".to_string(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         ),
         (
@@ -61,6 +86,8 @@ fn mock_responses() -> Vec<(&'static str, AgentPlan)> {
                     risk: RiskLevel::ReadOnly,
                     reason: "Prints current user name".to_string(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         ),
         (
@@ -74,6 +101,8 @@ fn mock_responses() -> Vec<(&'static str, AgentPlan)> {
                     risk: RiskLevel::ReadOnly,
                     reason: "Prints current date and time".to_string(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         ),
         (
@@ -87,6 +116,8 @@ fn mock_responses() -> Vec<(&'static str, AgentPlan)> {
                     risk: RiskLevel::ReadOnly,
                     reason: "Shows disk usage in human-readable format".to_string(),
                 }],
+                cache_template: None,
+                tokens_used: None,
             },
         ),
     ]
@@ -105,6 +136,18 @@ pub fn get_mock_plan(request: &str) -> Option<AgentPlan> {
 
 /// Преобразует AgentPlan в CachedStep для сохранения в кеш.
 pub fn plan_to_steps(plan: &AgentPlan) -> Vec<CachedStep> {
+    if let Some(template) = &plan.cache_template {
+        return template
+            .steps
+            .iter()
+            .map(|c| CachedStep {
+                command: c.command.clone(),
+                argv: c.argv.clone(),
+                risk: c.risk.clone(),
+            })
+            .collect();
+    }
+
     plan.commands
         .iter()
         .map(|c| CachedStep {
@@ -141,6 +184,36 @@ mod tests {
     #[test]
     fn test_plan_to_steps() {
         let plan = get_mock_plan("list files").unwrap();
+        let steps = plan_to_steps(&plan);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].command, "ls");
+    }
+
+    #[test]
+    fn test_plan_to_steps_prefers_cache_template_steps() {
+        let plan = AgentPlan {
+            summary: "Template".into(),
+            risk: RiskLevel::ReadOnly,
+            commands: vec![AgentCommand {
+                command: "pwd".into(),
+                argv: vec!["pwd".into()],
+                risk: RiskLevel::ReadOnly,
+                reason: "fallback".into(),
+            }],
+            cache_template: Some(AgentCacheTemplate {
+                parameters: serde_json::json!({}),
+                preconditions: vec![],
+                steps: vec![AgentCacheStep {
+                    command: "ls".into(),
+                    argv: vec!["ls".into(), "-la".into()],
+                    risk: RiskLevel::ReadOnly,
+                    description: Some("template step".into()),
+                }],
+                artifacts: vec![],
+            }),
+            tokens_used: Some(42),
+        };
+
         let steps = plan_to_steps(&plan);
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].command, "ls");

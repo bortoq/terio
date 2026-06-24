@@ -83,7 +83,7 @@
 - [x] Отображение подтверждения плана в UI (risk, команды, accept/decline)
 - [x] Индикатор trust level для каждой команды в UI
 - [x] Настройки в UI — окно конфигурации
-- [ ] Hash-bound confirmation для exact plan preview/approval
+- [x] Hash-bound confirmation для exact plan preview/approval
 
 ---
 

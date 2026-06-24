@@ -15,6 +15,7 @@ static CURRENT_PID: AtomicI32 = AtomicI32::new(0);
 
 /// Флаг запроса отмены.
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+const MAX_CAPTURE_BYTES: usize = 64 * 1024;
 
 /// Результат выполнения команды.
 #[derive(Debug)]
@@ -50,8 +51,8 @@ pub fn execute(argv: &[String]) -> Result<CommandResult> {
     CURRENT_PID.store(0, Ordering::SeqCst);
     let duration = start.elapsed();
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = truncate_output_bytes(&output.stdout, MAX_CAPTURE_BYTES);
+    let stderr = truncate_output_bytes(&output.stderr, MAX_CAPTURE_BYTES);
 
     // Если процесс был убит сигналом (отмена)
     let exit_code = if let Some(sig) = output.status.signal() {
@@ -405,6 +406,15 @@ pub fn truncate_safe(s: &str, max_chars: usize) -> String {
     }
 }
 
+fn truncate_output_bytes(bytes: &[u8], max_bytes: usize) -> String {
+    if bytes.len() <= max_bytes {
+        return String::from_utf8_lossy(bytes).to_string();
+    }
+
+    let truncated = String::from_utf8_lossy(&bytes[..max_bytes]).to_string();
+    format!("{}… (output truncated)", truncated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,5 +601,12 @@ mod tests {
             entry.stdout_summary.as_ref().map(|s| s.len()),
             Some("a".repeat(1024).len() + "… (truncated)".len())
         );
+    }
+
+    #[test]
+    fn test_execute_truncates_large_output() {
+        let result = execute(&argv("python3", &["-c", "print('x' * 70000)"])).unwrap();
+        assert!(result.stdout.contains("(output truncated)"));
+        assert!(result.stdout.len() < 66_000);
     }
 }

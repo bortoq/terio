@@ -257,12 +257,14 @@ fn render_ask_result(result: AskResult, store: &LogStore, request: &str) -> anyh
             eprintln!("terio: не знаю, как ответить на \"{request}\".");
         }
         AskResult::PendingConfirmation {
+            plan_hash,
             source,
             plan_summary,
             execution,
         } => {
             let _ = ask::save_pending_confirmation(
                 &ask::PendingConfirmationState {
+                    plan_hash,
                     source: source.clone(),
                     plan_summary: plan_summary.clone(),
                 },
@@ -296,14 +298,19 @@ fn print_log_plain(entries: &[terio::types::LogEntry]) {
         return;
     }
     for entry in entries {
-        let ts = &entry.ts[..19];
+        let ts = terio::run::truncate_safe(&entry.ts, 19);
         let kind = format!("{:?}", entry.kind);
         let desc = entry
             .command
             .as_ref()
-            .map(|c| &c.display[..std::cmp::min(60, c.display.len())])
-            .or(entry.description.as_deref())
-            .unwrap_or("—");
+            .map(|c| terio::run::truncate_safe(&c.display, 60))
+            .or_else(|| {
+                entry
+                    .description
+                    .as_ref()
+                    .map(|d| terio::run::truncate_safe(d, 60))
+            })
+            .unwrap_or_else(|| "—".to_string());
         let status = entry
             .status
             .as_ref()

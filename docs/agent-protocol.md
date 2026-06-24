@@ -33,12 +33,19 @@ OpenAI provider сейчас отправляет модели:
 }
 ```
 
+Опционально provider может вернуть `cache_template`, но текущий runtime использует его как metadata для cache persistence и validation; execution всё равно идёт по `commands`.
+
 ### Runtime validation
 
 Перед execution terio дополнительно проверяет:
 
+- JSON parse через `serde` + shape validation для обязательных полей provider response
+- `summary` не пустой
+- `commands` не пустой
 - `argv` не пустой
 - `command == argv[0]`
+- пустые элементы `argv` запрещены
+- `cache_template.steps`, если присутствуют, тоже валидируются по тем же инвариантам
 - risk пересчитывается локально по `argv[0]` и аргументам
 - unknown commands не auto-run
 - path boundary и scope не обходятся через `--yes`
@@ -50,18 +57,15 @@ OpenAI provider сейчас отправляет модели:
 1. сохраняет redacted preview в `~/.terio/pending-plan.json`
 2. сохраняет exact execution state в `~/.terio/pending-exec.json`
 3. выполняет подтверждённый plan только через `terio confirm`
+4. сверяет `plan_hash` preview и exact payload перед execution
 
 Это значит, что UI/CLI confirmation больше не вызывает provider повторно для уже подтверждённого action.
 
-## Ещё не реализовано
+## Ограничения
 
-Следующие части остаются целевыми, но не реализованы полностью:
-
-- `cache_template`
-- strict JSON mode / schema-bound provider response
-- usage-token accounting из ответа provider
-- hash-bound approval of preview vs exact execution payload
-- richer provider context beyond `cwd` и top-level entries
+- Pending execution payload хранится локально в plaintext; на Unix файл ограничен `0600`, но это не заменяет disk encryption и host hardening
+- Внешний JSON schema validator пока не подключён; контракт обеспечивается `response_format`, `serde` deserialization и runtime checks
+- Provider context по-прежнему ограничен `request`, `cwd` и top-level entries
 
 ## Known Commands
 
