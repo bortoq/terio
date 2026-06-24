@@ -9,6 +9,7 @@
 ```json
 {
   "request": "list files in current directory",
+  "interaction_id": "uuid",
   "cwd": "/home/user/projects/terio",
   "files": ["README.md", "architecture.md", "src/", "docs/"],
   "allowed_risks": ["read_only", "local_write"],
@@ -18,6 +19,7 @@
 ```
 
 **Правила:**
+- `interaction_id` — UUID запроса пользователя. Все последующие записи в логе получают этот ID.
 - `files` — только имена. Содержимое не отправляется (защита от prompt injection).
 - `allowed_risks` — terio сообщает модели, какие риски допустимы. Модель не может их расширить.
 - Secrets/Credentials никогда не попадают в input.

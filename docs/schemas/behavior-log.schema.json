@@ -1,104 +1,128 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Behavior Log Schema (v1)",
-  "description": "Схема записи в JSONL-логе поведения terio",
+  "description": "Схема записи в JSONL-логе поведения terio. Все записи имеют общие поля + поля специфичные для kind.",
   "type": "object",
-  "required": ["timestamp", "kind", "request_hash"],
+  "required": ["schema_version", "instance_id", "session_id", "interaction_id", "ts", "kind"],
   "properties": {
-    "timestamp": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Версия схемы"
+    },
+    "instance_id": {
+      "type": "string",
+      "description": "ULID экземпляра terio (генерируется при первом запуске, не меняется)"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "UUID сессии (один запуск terio)"
+    },
+    "interaction_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "UUID одного запроса пользователя. Группирует пары (запрос → ответ)"
+    },
+    "ts": {
       "type": "string",
       "format": "date-time",
       "description": "Время события (ISO8601)"
     },
     "kind": {
       "type": "string",
-      "enum": ["agent_turn", "command_run", "script_run"],
+      "enum": ["agent_turn", "command_run", "script_run", "system_event"],
       "description": "Тип записи"
     },
-    "request_hash": {
-      "type": "string",
-      "description": "SHA-256 нормализованного запроса (может быть пустым для terio run)"
+    "display_profile": {
+      "type": "object",
+      "description": "Как показывать эту запись пользователю",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["auto", "text", "table", "media", "hidden", "summary"],
+          "description": "Тип отображения"
+        },
+        "renderer_hint": {
+          "type": "string",
+          "enum": ["auto", "table", "plain", "timeline", "card"],
+          "description": "Подсказка для renderer"
+        },
+        "user_visible": {
+          "type": "boolean",
+          "description": "Показывать пользователю или скрыть"
+        },
+        "summary_max_lines": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Для type: summary — сколько строк показывать"
+        }
+      }
     },
-    "script_id": {
-      "type": "string",
-      "description": "ID скрипта из кеша (только для script_run)"
-    },
-    "cache_hit": {
-      "type": "boolean",
-      "description": "Был ли это cache hit"
-    },
-    "model_called": {
-      "type": "boolean",
-      "description": "Вызывалась ли модель"
-    },
-    "model_provider": {
-      "type": "string",
-      "description": "Провайдер модели (ollama, openai, anthropic)"
-    },
-    "tokens_used": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Потраченные токены"
-    },
-    "commands": {
-      "type": "array",
-      "description": "Выполненные команды",
-      "items": {
-        "type": "object",
-        "properties": {
-          "command": { "type": "string" },
-          "argv_redacted": {
-            "type": "array",
-            "description": "Аргументы с редэкцией секретов",
-            "items": { "type": "string" }
-          },
-          "exit_code": { "type": "integer" },
-          "duration_ms": { "type": "integer", "minimum": 0 },
-          "stdout_summary": {
-            "type": "string",
-            "description": "Первые 512 символов stdout"
-          },
-          "stderr_summary": {
-            "type": "string",
-            "description": "Первые 512 символов stderr"
-          },
-          "risk": {
-            "type": "string",
-            "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"]
+    "cost_counters": {
+      "type": "object",
+      "description": "Сырые счётчики расходов для будущей total_attention_cost",
+      "properties": {
+        "observation_cost_hint": {
+          "type": "object",
+          "properties": {
+            "user_sec": { "type": "number", "minimum": 0, "description": "Секунд внимания пользователя (MVP: заглушка)" }
+          }
+        },
+        "llm_cost": {
+          "type": "object",
+          "properties": {
+            "tokens": { "type": "integer", "minimum": 0 },
+            "duration_ms": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "execution_cost": {
+          "type": "object",
+          "properties": {
+            "duration_ms": { "type": "integer", "minimum": 0 },
+            "commands_executed": { "type": "integer", "minimum": 0 },
+            "bytes_read": { "type": "integer", "minimum": 0 },
+            "bytes_written": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "cache_cost": {
+          "type": "object",
+          "properties": {
+            "lookup_ms": { "type": "integer", "minimum": 0 },
+            "hit": { "type": "boolean" }
+          }
+        },
+        "storage_cost": {
+          "type": "object",
+          "properties": {
+            "bytes_written": { "type": "integer", "minimum": 0 },
+            "bytes_read": { "type": "integer", "minimum": 0 }
           }
         }
       }
     },
-    "failure_kind": {
-      "type": "string",
-      "enum": ["command_error", "timeout", "cancelled", "precondition_failed", "validation_error"],
-      "description": "Тип ошибки, если была"
-    },
-    "attention_cost": {
-      "type": "object",
-      "description": "Раздельная стоимость внимания",
-      "properties": {
-        "user_sec": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Секунд внимания пользователя"
-        },
-        "agent_sec": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Секунд внимания агента (LLM)"
-        },
-        "system_sec": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Секунд внимания ОС/программ"
-        }
-      }
-    },
-    "request_preview": {
-      "type": "string",
-      "description": "Первые 512 символов запроса (с редэкцией)",
-      "maxLength": 512
-    }
+    "request": { "type": "string", "description": "Текст запроса (только для agent_turn, command_run, script_run)" },
+    "cwd": { "type": "string", "description": "Рабочая директория" },
+    "risk": { "type": "string", "enum": ["read_only", "local_write", "destructive", "network_read", "network_write", "credential_access", "financial"] },
+    "status": { "type": "string", "enum": ["success", "failed", "cancelled"] },
+    "failure_kind": { "type": "string", "description": "Тип ошибки, если status=failed" },
+    "prompt_summary": { "type": "string", "maxLength": 512, "description": "Краткое содержание запроса к модели (с редэкцией)" },
+    "plan": { "type": "array", "description": "План команд от модели" },
+    "model_provider": { "type": "string" },
+    "model_name": { "type": "string" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "tokens_used": { "type": "integer", "minimum": 0 },
+    "command": { "type": "object", "description": "Выполненная команда (для command_run)" },
+    "exit": { "type": "integer", "description": "Exit code" },
+    "stdout_summary": { "type": ["string", "null"], "maxLength": 1024 },
+    "stderr_summary": { "type": ["string", "null"], "maxLength": 1024 },
+    "script_id": { "type": "string", "description": "ID скрипта из кеша (для script_run)" },
+    "cache_hit": { "type": "boolean" },
+    "model_called": { "type": "boolean" },
+    "tokens_saved_estimate": { "type": "integer", "minimum": 0 },
+    "success_count_before": { "type": "integer", "minimum": 0 },
+    "success_count_after": { "type": "integer", "minimum": 0 },
+    "steps": { "type": "array", "description": "Шаги выполнения (для script_run)" },
+    "parent_interaction_id": { "type": "string", "description": "interaction_id родительского запроса (если один запрос породил другой)" }
   }
 }
