@@ -47,7 +47,7 @@
 - [x] Risk classifier: git clean/reset/push, curl -X POST, docker rm/rmi, cat .ssh и т.д.
 - [x] Группировка по interaction_id в логе (поле + `by_interaction`).
 - [x] Исправления аудита: не кешировать non-zero exit, success_count_before/after, scope в CacheEntry, mock только read-only, LogReader::stream() убран, stats на всех записях, warning для destructive при `terio run`.
-- [ ] Table renderer в Dioxus (отображение команд и результатов в табличном виде).
+- [x] Table renderer в Dioxus (отображение команд и результатов в табличном виде).
 
 **Критерий:** `terio ask "list files"` (первый) → mock, вывод. Повторный → cache hit, быстрее. `terio stats` показывает cache_hits > 0.
 
