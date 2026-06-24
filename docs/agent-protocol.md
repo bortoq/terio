@@ -111,7 +111,7 @@ gh, echo, printf, shasum, find, grep, awk, sort, uniq, head, tail, wc,
 date, pwd, which
 ```
 
-Для MVP-1B/1C можно использовать narrower список:
+Для early MVP можно использовать narrower список:
 ```
 ls, pwd, echo, printf, cat (non-sensitive paths), find (read-only flags),
 grep, head, tail, wc, which, date

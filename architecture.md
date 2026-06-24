@@ -137,6 +137,14 @@ pub trait LogReader: Send + Sync {
 struct LogStore { writer, reader, broadcaster }
 ```
 
+## Process model (MVP)
+
+`LogEventStream` работает **внутри одного процесса**. Все команды, выполненные через UI (Dioxus), обновляют UI через in-memory broadcast.
+
+`terio run -- <command>` из внешнего shell — отдельный процесс. Он пишет в JSONL, но не отправляет события в in-memory stream уже запущенного UI. Для MVP это приемлемо: пользователь перезагружает лог командой `terio log` в UI или открывает новый экземпляр.
+
+Cross-process live update (IPC, file watching) — Phase 6+.
+
 ### 8. Accounting
 
 **MVP:**
