@@ -5,6 +5,13 @@
 
 ---
 
+> **Важно:** этот roadmap описывает **новый target direction** после pivot `8acb1fa`.
+> Текущий код содержит прежний baseline (ask/confirm/undo/integrations/multi-view Dioxus UI),
+> который будет постепенно мигрирован к новой архитектуре.
+> См. [architecture.md](architecture.md) (раздел Current) для текущего состояния
+> и [docs/migration-to-window-model.md](docs/migration-to-window-model.md) для плана миграции.
+
+
 ## Текущее видение
 
 **terio — интегратор интерфейсов.** Пользователь работает в одном окне-терминале.

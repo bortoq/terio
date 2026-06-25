@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
     name = "terio",
     author,
     version,
-    about = "Интерфейс-агрегатор с AI-планированием"
+    about = "Интегратор интерфейсов: терминал с LLM, кешем скриптов и песочницей"
 )]
 pub struct Cli {
     #[command(subcommand)]

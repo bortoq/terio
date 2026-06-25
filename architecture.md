@@ -1,13 +1,116 @@
 # Architecture
 
-## Core Idea
+Этот документ содержит два раздела:
+1. **Current architecture** — как код устроен сейчас
+2. **Target architecture** — новое видение после pivot `8acb1fa`
+3. **Migration plan** — как перейти от current к target
 
-**terio — интегратор интерфейсов.** Пользователь работает в едином окне-терминале.
-terio под капотом использует LLM, кеш скриптов и песочницу, а результат отдаёт как окно — от текста до видео.
+---
 
-Внешне terio неотличим от терминала: чёрный экран, ввод внизу, вывод наверх.
-Единственное видимое отличие — результат может быть rich-окном (плеер, браузер, графика),
-которому terio передаёт фокус после вывода.
+# 1. Current architecture
+
+Текущая реализация terio.
+
+## Core components
+
+```
+┌──────────────────────────────────────────────────┐
+│              COMMAND SURFACE                      │
+│   terio ask / terio run -- <command>              │
+│   interaction_id генерируется здесь               │
+├──────────────────────────────────────────────────┤
+│              REQUEST MATCHER                      │
+│   exact normalized match → script; иначе → agent  │
+├──────────┬───────────────────┬───────────────────┤
+│  AGENT   │  EXECUTION LAYER  │  UI (Dioxus)      │
+│  (LLM)   │  (shell, process) │  multi-view       │
+├──────────┴───────────────────┴───────────────────┤
+│           SCRIPT CACHE                            │
+│   normalized_request → { steps, risk, metadata }  │
+├──────────────────────────────────────────────────┤
+│           LOG (LogStore)                          │
+│   LogWriter trait → JsonlLogWriter                │
+│   LogReader trait → JsonlLogReader                │
+│   LogEventStream (broadcast)                      │
+├──────────────────────────────────────────────────┤
+│           INTEGRATION MANAGER                     │
+│   learn/forget/share/receive                      │
+├──────────────────────────────────────────────────┤
+│           ACCOUNTING                              │
+│   cost_counters в каждой записи лога              │
+├──────────────────────────────────────────────────┤
+│           TRUST + UNDO                            │
+│   Policy, auto-run, scope validation              │
+│   Best-effort snapshot/undo/bubblewrap            │
+├──────────────────────────────────────────────────┤
+│           STORAGE + IDENTITY                      │
+│   config, cache, log, trash                       │
+│   instance_id + session_id                        │
+└──────────────────────────────────────────────────┘
+```
+
+### CLI commands (from `src/cli.rs`)
+
+| Команда | Назначение | Статус |
+|---------|-----------|--------|
+| `ask` | Запрос через LLM | ✓ stable |
+| `run` | Shell-команда | ✓ stable |
+| `log` | Просмотр лога | ✓ stable |
+| `ui` | Открыть Dioxus UI | ✓ stable |
+| `stats` | Метрики | ✓ stable |
+| `cancel` | Отмена операции | ✓ stable |
+| `confirm` | Подтверждение плана | ✓ stable |
+| `undo/redo` | Откат/повтор | ⚠ experimental |
+| `config` | Настройки | ✓ stable |
+| `learn/integrations/forget` | Интеграции | ✓ Phase 7 |
+| `share/receive` | Шэринг окон | ✓ Phase 7 |
+
+### UI
+
+- Dioxus 0.6 desktop webview, опционально (feature `desktop`)
+- Multi-view workspace: Auto, Table, Timeline, Cards, Readable, Chat
+- Компоненты в `src/ui/`:
+  - `app.rs` — Dioxus-компоненты
+  - `state.rs` — глобальное состояние, RowData, prepare_rows
+  - `renderer.rs` — выбор режима отображения
+
+### Log
+
+- `LogWriter` trait → `JsonlLogWriter` (append, flush)
+- `LogReader` trait → `JsonlLogReader` (recent, by_session, by_interaction)
+- `LogStore` — writer + reader + broadcast channel
+- Каждая запись: `instance_id`, `session_id`, `interaction_id`, `cost_counters`
+
+### Agent
+
+- Provider trait: `plan(&self, request) → AgentPlan`
+- Реализации: OpenAI, Anthropic, Ollama, Mock
+- Secrets redact перед отправкой
+
+### Trust
+
+- Risk levels: read_only, local_write, destructive, network, credential
+- Policy: always_ask / ask_once / allow
+- Auto-run: exact match + risk ≤ local_write + N успехов + scope
+- Fuzzy match: никогда не auto-run
+
+### Integration Manager
+
+- `terio learn <program>` — запускает --help, парсит, генерирует скрипт
+- `terio integrations` — список изученных
+- `terio forget` — удаление
+- `terio share/receive` — экспорт/импорт SharedWindow
+
+---
+
+# 2. Target architecture
+
+Новое видение после pivot `8acb1fa`. Постепенно заменяет current architecture.
+
+## Product metaphor
+
+terio — интегратор интерфейсов, внешне неотличимый от терминала.
+Единственное отличие — результат может быть rich-окном (плеер, браузер, графика).
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -18,16 +121,23 @@ terio под капотом использует LLM, кеш скриптов и
 │  └───────────────────────────────────────┘  │
 │  ┌─── Window #2 (FocusOut) ──────────────┐  │
 │  │  result of "ls -la"                   │  │
-│  │  total 42                             │  │
-│  │  drwxr-xr-x  12 user  users   384 Jun │  │
 │  └───────────────────────────────────────┘  │
-│  ┌─── Window #1 (FocusIn) ──────────────┐  │
+│  ┌─── Window #1 (FocusIn, always visible)┐  │
 │  │  $ _                                  │  │
 │  └───────────────────────────────────────┘  │
 └─────────────────────────────────────────────┘
 ```
 
-## Компоненты
+## Key design rules
+
+1. **Терминальная парадигма:** пользователь не замечает, что работает не с терминалом.
+2. **Окно = результат:** каждый ответ — окно. Никаких режимов просмотра.
+3. **Скрипты — единственный способ управления:** всё настраивается скриптами.
+4. **Экономия внимания:** quiet mode по умолчанию.
+5. **Песочница для untrusted:** CoW-изоляция без отвлечения пользователя.
+6. **Проактивность:** terio предугадывает, но не навязывается.
+
+## Target components
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -37,181 +147,128 @@ terio под капотом использует LLM, кеш скриптов и
 ├──────────────────────────────────────────────┤
 │              INPUT SURFACE                    │
 │  Текст + Enter. Мышь/хоткеи — через скрипты.  │
-│  interaction_id генерируется здесь.            │
 ├──────────┬───────────────────┬───────────────┤
 │  SCRIPT  │  EXECUTION LAYER  │  SANDBOX      │
 │  ENGINE  │  (shell, process) │  (CoW/bwrap)  │
 ├──────────┴───────────────────┴───────────────┤
 │           SCRIPT CACHE + SYNONYM DICT         │
 │  NormalizedQuery → ScriptId → steps          │
-│  Синонимы: старые/неточные запросы → скрипт   │
+│  Синонимы: старые запросы → тот же скрипт     │
 ├──────────────────────────────────────────────┤
 │           LOG (LogStore)                      │
-│  LogWriter trait → JsonlLogWriter             │
-│  LogReader trait → JsonlLogReader             │
-│  LogEventStream (broadcast)                   │
+│  (без изменений относительно current)         │
 ├──────────────────────────────────────────────┤
 │           ACCOUNTING + COST OPTIMIZER         │
-│  cost_counters, C_total формула,              │
-│  выбор маршрута (script vs LLM)              │
+│  C_total = C_llm + C_attention + C_risk      │
 ├──────────────────────────────────────────────┤
 │           STORAGE + IDENTITY                  │
-│  config, cache, log, sandbox snapshots        │
-│  instance_id + session_id                     │
+│  (без изменений относительно current)         │
 └──────────────────────────────────────────────┘
 ```
 
-### 1. Window Manager
-
-Управляет массивом окон (`VecDeque<Window>`):
+### Window model
 
 ```rust
 struct Window {
     id: Uuid,
-    kind: WindowKind,       // Text | Rich { url, mime } | Confirm
-    content: String,        // отображённый текст (или HTML для rich)
+    kind: WindowKind,   // Text | Rich { url, mime } | Confirm
+    content: String,
     focusable: bool,
     created_at: DateTime,
 }
-
-enum WindowKind {
-    Text,                    // обычный текст (stdout)
-    Rich { url: String, mime: String },  // плеер, iframe
-    Confirm { prompt: String },          // запрос подтверждения
-}
 ```
 
-- **FocusIn** — окно ввода (всегда внизу, всегда видимо).
-- **FocusOut** — окно для скролла (подсветка, переключение Tab/Shift+Tab или скриптами).
-- **Scrollback**: при overflow окна уходят в историю (но не уничтожаются).
-  Прокрутка вверх — подтягивает старые окна.
-- Восстановление из лога при запуске: последние N окон загружаются из LogStore.
+### Focus
 
-### 2. Input Surface
+- **FocusIn** — окно ввода (всегда внизу, всегда видимо)
+- **FocusOut** — окно для скролла (подсветка, переключается скриптами)
 
-- **Единственный обязательный протокол ввода:** текст + Enter.
-- Мышь, хоткеи, Tab-переключение — реализуются скриптами (см. Script Engine).
-- Каждый запрос генерирует `interaction_id` (UUID).
+### Scrollback
 
-### 3. Script Engine
+- Окна не уничтожаются, а уходят в историю при overflow
+- Прокрутка вверх подтягивает старые окна
 
-Всё управление terio — через скрипты:
+### Attention modes
+
+| Режим | Поведение | Default |
+|-------|-----------|---------|
+| `quiet` | Нет подтверждений, всё в лог | ✓ Default |
+| `normal` | Подтверждение untrusted (1 раз/сессию) | |
+| `debug` | Каждый шаг подтверждается | |
+
+### Sandbox (target)
+
+- **CoW:** перед untrusted-командой — snapshot изменяемых файлов
+- **Изоляция чтения:** bubblewrap с пустым rootfs + bind mounts
+- **Продвижение в trusted:** read-only → 1 успех; local_write → N успехов; network/destructive → никогда auto-trust
+
+### Script engine (target)
+
+- Всё управление через скрипты: help, config, focus, confirm, security
+- Интерпретатор — ядро terio (Rust)
+- Три уровня: `core/` (встроенные), `user/` (пользовательские), `learned/` (из LLM)
+
+### Cost optimizer (target)
 
 ```
-terio-scripts/
-  core/          # встроенные (нельзя удалить, можно переопределить)
-    help.ts
-    focus.ts
-    config.ts
-    confirm.ts
-    security.default.ts
-    security.strict.ts
-    security.off.ts
-  user/          # пользовательские
-  learned/       # созданные из успешных LLM-запросов
-```
-
-Формат скрипта (YAML):
-```yaml
-name: help
-triggers: ["help", "помощь", "h"]
-steps:
-  - run: "terio --help"
-  - show: window.kind.help
-```
-
-- **Инвариант:** скрипты запускает terio, не наоборот. Интерпретатор — часть ядра на Rust.
-
-### 4. Execution Layer
-
-- Запускает процесс, стримит stdout/stderr.
-- Отмена: Ctrl+C, таймаут, `terio cancel`.
-- Untrusted-команды → песочница (CoW).
-
-### 5. Sandbox (CoW)
-
-- **Copy-on-Write:** перед untrusted-командой все изменяемые файлы копируются в `~/.terio/sandbox/<id>/snap/`.
-- При подтверждении — снапшоты удаляются (commit).
-- При отказе/ошибке — снапшоты восстанавливаются (rollback).
-- **Изоляция чтения:** через `bubblewrap` с пустым rootfs + bind mounts разрешённых путей.
-- **Продвижение:** после 1 успешного выполнения untrusted → trusted.
-  Trusted-скрипты выполняются без песочницы.
-- Белые списки `no_read_paths` в конфиге.
-
-### 6. Script Cache + Synonym Dictionary
-
-```rust
-struct ScriptCache {
-    // Точное совпадение (normalized)
-    exact: HashMap<NormalizedQuery, ScriptId>,
-    // Синонимы: разные запросы → один скрипт
-    synonyms: HashMap<NormalizedQuery, ScriptId>,
-}
-
-struct Script {
-    id: ScriptId,
-    steps: Vec<Step>,
-    success_count: u64,
-    total_runs: u64,
-    confidence: f64,  // success_count / total_runs
-}
-```
-
-- **Пополнение:** после успешного LLM-запроса → запись в exact.
-- **Синонимы:** если `"help"` привёл к ошибке, а затем `"terio help"` — успех,
-  то `"help"` → синоним → тот же скрипт.
-- **Чистка:** синонимы с частотой < порога удаляются.
-
-### 7. Log (LogStore)
-
-Без изменений относительно текущей реализации:
-- `LogWriter` trait → `JsonlLogWriter`
-- `LogReader` trait → `JsonlLogReader`
-- `LogEventStream` (broadcast после записи в буфер)
-- Каждая запись лога: `instance_id`, `session_id`, `interaction_id`, `cost_counters`.
-
-### 8. Accounting + Cost Optimizer
-
-```rust
-// Формула полной стоимости
 C_total = C_llm_tokens + C_user_attention + C_risk
-
 C_risk = P(failure) * C_rollback
-C_rollback = время восстановления + потери при необратимых операциях
 ```
 
-- Оптимизатор выбирает: выполнить скрипт (дёшево) или спросить LLM (гибко).
-- Байесовский классификатор для точности предсказаний (phase 5).
+---
 
-### 9. Режимы внимания
+# 3. Migration plan
 
-| Режим | Поведение | Когда использовать |
-|-------|-----------|------------------|
-| `quiet` | Нет подтверждений, всё в лог | Default, 90% пользователей |
-| `normal` | Подтверждение untrusted (1 раз/сессию/скрипт) | Обычная работа |
-| `debug` | Каждый шаг подтверждается | Отладка новых действий |
+Как перейти от current multi-view Dioxus workspace к target terminal-like window manager.
 
-Переключение: `terio mode quiet|normal|debug`.
+## Step 1: Документация и alignment (текущий коммит)
 
-## Data Flow
+- [x] README: Current vs Target
+- [x] architecture.md: current + target + migration plan
+- [x] roadmap.md: добавить pivot note
+- [x] docs/current-status.md
+- [x] docs/migration-to-window-model.md
+- [x] cli.rs: обновить about
 
-```
-Пользователь → [текст + Enter]
-  → Input Surface → interaction_id
-    → Script Engine: поиск в exact + synonyms
-      → Найден? → Execution Layer (trusted → напрямую,
-                                        untrusted → Sandbox)
-      → Не найден? → LLM → план → окно-подтверждение
-        → Подтверждено? → Execution → Log → Window
-        → Отклонено? → Window закрывается
-    → Результат → Window Manager → viewport
-```
+## Step 2: Window model (замена multi-view)
 
-## Key Design Rules
+- [ ] Добавить `Window` struct и `WindowManager` (VecDeque + FocusIn/Out)
+- [ ] Заменить режимы (Table/Timeline/Cards/Chat/Auto) на `WindowKind::Text`
+- [ ] InputSurface: строка ввода внизу (как терминал)
+- [ ] Перенести существующие рендеры в WindowKind: текстовый → Text, подтверждение → Confirm
+- [ ] Убрать переключатель режимов из UI
+- [ ] Log → Window: восстановление окон из лога при запуске
 
-1. **Терминальная парадигма:** пользователь не должен замечать, что работает не с терминалом.
-2. **Окно = результат:** каждый ответ — окно. Никаких режимов.
-3. **Скрипты — единственный способ управления:** всё настраивается через скрипты.
-4. **Экономия внимания:** quiet mode по умолчанию. Внимание пользователя — самый дорогой ресурс.
-5. **Песочница для untrusted:** защита без отвлечения пользователя.
-6. **Проактивность:** terio предугадывает, но не навязывается.
+## Step 3: Attention modes и confirm как окно
+
+- [ ] Три режима: quiet / normal / debug (переключение через конфиг)
+- [ ] Confirm из отдельного диалога → окно `WindowKind::Confirm` в потоке
+- [ ] Убрать `terio confirm` как отдельную команду (заменить на окно-подтверждение)
+
+## Step 4: Sandbox
+
+- [ ] Использовать существующий `undo.rs` (snapshot/bubblewrap) как базис
+- [ ] CoW: snapshot до untrusted → rollback при ошибке
+- [ ] Изоляция чтения: bwrap с bind mounts
+- [ ] Продвижение: read-only → 1 успех; local_write → N успехов
+
+## Step 5: Script engine
+
+- [ ] Интерпретатор скриптов в ядре
+- [ ] Перенос help/config/focus/confirm в скрипты
+- [ ] synonym dictionary на базе существующего matcher.rs
+
+## Step 6: Проактивность и cost optimizer
+
+- [ ] Предугадывание следующей команды по логу
+- [ ] Формула C_total
+- [ ] Байесовский классификатор
+
+## Что сохраняется без изменений
+
+- LogStore, LogWriter/LogReader traits
+- Script Cache (с добавлением synonym dict)
+- Identity (instance_id, session_id)
+- Accounting (cost_counters)
+- Redaction
+- Integration Manager (learn/forget/share/receive будет переписан на script engine)
