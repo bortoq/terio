@@ -1,144 +1,100 @@
 # Roadmap
 
 Каждая фаза — список конкретных вещей, которые надо сделать.
-Сделано → `[x]` → все `[x]` → фаза готова → аудит.
+Сделано → `[x]` → все `[x]` → фаза готова.
 
 ---
 
-## 0. Определение архитектуры
+## Текущее видение
 
-- [x] Сформулировать суть: агрегатор интерфейсов
-- [x] Scope: расширяется лениво, от пользовательских запросов
-- [x] Стек: Rust, Dioxus (webview), CLI-совместимость
-- [x] docs/mvp.md, docs/trust-model.md, docs/behavior-log.md, docs/agent-protocol.md
-- [x] LICENSE
-- [x] Экономическая модель: cost_counters в каждой записи лога
-- [x] JSON Schema: agent-output, script-cache, behavior-log
-- [x] LogWriter/LogReader traits — дизайн для смены формата
-- [x] identity: instance_id + session_id
-- [x] display_profile — типизация записей лога
-- [x] interaction_id — группировка пар
-- [x] Cargo.toml и базовая src/ структура
-- [x] CI: линтер + сборка
+**terio — интегратор интерфейсов.** Пользователь работает в одном окне-терминале.
+terio под капотом использует LLM, кеш скриптов и песочницу, а результат отдаёт как окно — от текста до видео.
 
----
+### Ключевые принципы
 
-## 1. Shell + log + scaffold
+- **Терминальная парадигма**: взаимодействие с terio неотличимо от терминала.
+  Единственное видимое отличие — результат может быть rich-окном (плеер, браузер, графика).
+- **Окно = результат**: каждый ответ terio — окно. Тип окна определяет terio (текст, видео, подтверждение).
+- **Никаких режимов просмотра**: Table/Timeline/Cards/Readable/Chat/Auto — удалены.
+  Каждый тип сообщения сам знает, как себя отобразить.
+- **Два фокуса**: FocusIn (ввод, всегда внизу) + FocusOut (вывод для скролла, переключается).
+- **Scrollback**: окна не уничтожаются, а уходят в историю при overflow.
+- **Скрипты — единственный способ управления**: help, config, focus, confirm, security — всё скрипты.
+  Пользователь может менять логику terio под себя.
+- **Проактивность**: terio предугадывает следующий запрос пользователя по контексту.
+- **Экономия внимания**: по умолчанию — тихий режим (не отвлекает).
+  Режим диалога — только когда пользователь явно включил отладку.
+- **Безопасность через песочницу (CoW)**: untrusted-команды выполняются в copy-on-write-окружении.
+  После первого успеха скрипт переезжает в trusted.
 
-- [x] `terio run -- <command>` — запуск, захват stdout/stderr/exit/duration
-- [x] Identity: instance_id (ULID) + session_id (UUID v4)
-- [x] LogWriter trait + JsonlLogWriter: append → validate → write
-- [x] LogReader trait + JsonlLogReader: recent(n), by_session(), by_interaction()
-- [x] LogStore: writer + reader + broadcaster
-- [x] Accounting: cost_counters, aggregate, compute_attention_cost stub
-- [x] display_profile: type, renderer_hint, user_visible
-- [x] Dioxus scaffold: окно, показывает лог через LogStore::recent(50)
-- [x] `terio log --json` — история в JSON
-- [x] CI: cargo test + cargo build
+### Что убрали/упростили
 
----
-
-## 2. Mock agent + cache + redact + risk
-
-- [x] `terio ask "list files"` — mock: 5 hardcoded запросов
-- [x] Script Cache: первый ask → сохранить chain (JSON в `~/.terio/cache/`)
-- [x] Request Matcher: exact normalized match (lowercase+trim+collapse + SHA-256)
-- [x] Повторный `terio ask "list files"` — cache hit, без mock
-- [x] `terio stats` — model_calls, cache_hits, cost_counters
-- [x] Redact: Bearer, api_key, token, SSH key, URL credentials
-- [x] Risk classifier: destructive/network_write/local_write/credential_access
-- [x] Группировка по interaction_id в логе
-- [x] Не кешировать non-zero exit
-- [x] success_count_before/after в ScriptRun
-- [x] Scope в CacheEntry
-- [x] Mock только read-only команды (никаких mkdir/rm)
-- [x] Warning для destructive/network_write/credential_access при `terio run`
-- [x] Table renderer в Dioxus (6 колонок, цвета)
+- AI-агрегатор → интегратор интерфейсов
+- Режимы просмотра (Table/Timeline/Cards/Readable/Chat/Auto) → окна
+- Сложный risk management (trust policy, fuzzy/exact distinction) → песочница + скрипты безопасности
+- ask (отдельный диалог) → окно-подтверждение в потоке
+- Отдельные UI-элементы управления → скрипты
 
 ---
 
-## 3. Реальный LLM provider
+## Фаза 0. Ядро: терминал + окна
 
-- [x] `terio config set provider.type openai/anthropic/ollama/mock`
-- [x] `terio config set provider.api_key`, `provider.model`, `provider.base_url`
-- [x] `terio config show` — маскирует API key
-- [x] OpenAI provider baseline — вызывает Chat Completions API, передаёт request/cwd/top-level files, парсит JSON-план
-- [x] Provider trait: plan(&self, request) → AgentPlan
-- [x] MockProvider — обёртка над существующим get_mock_plan
-- [x] create_provider(config) — фабрика по типу провайдера
-- [x] План → pending confirmation → exact saved execution через `terio confirm`
-- [x] Secrets redact перед отправкой в модель
-- [x] `terio cancel` — отправляет SIGTERM активному процессу
-- [x] Ctrl+C — перехватывает SIGINT, убивает процесс, чисто завершается
-- [x] Поле ввода + кнопка Ask в Dioxus UI
+- [ ] Переписать UI: чёрный экран, ввод внизу, вывод — окнами
+- [ ] Модель Window: id, content (Text | Rich), focusable
+- [ ] Два фокуса: FocusIn (всегда виден) + FocusOut (переключение)
+- [ ] Scrollback: VecDeque<Window>, viewport с прокруткой
+- [ ] Убрать режимы (Table/Timeline/Cards/Readable/Chat/Auto)
+- [ ] Подтверждение риска — окно типа Confirm (y/N в потоке)
+- [ ] Режимы внимания: quiet / normal / debug
+- [ ] `terio help` — встроенная справка
+- [ ] `terio focus ↑/↓` — переключение окна вывода
+- [ ] `terio scroll N` — скролл
+- [ ] `terio repeat` — повторить последний запрос
+- [ ] Log → Window: восстановление окон из лога при запуске
+- [ ] CI: cargo fmt + clippy + test
 
----
+## Фаза 1. Песочница (CoW)
 
-## 4. Trust + безопасность
+- [ ] Copy-on-Write для untrusted-команд (на базе undo.rs / bubblewrap)
+- [ ] Snapshot до выполнения, rollback при ошибке/отмене
+- [ ] Untrusted → Trusted после 1 успеха (N=1)
+- [ ] Изоляция чтения: bwrap с пустым rootfs + bind mounts
+- [ ] Белые списки no_read_paths в конфиге
+- [ ] `terio sandbox status` — просмотр состояния песочницы
 
-- [x] Policy: always_ask / ask_once / allow
-- [x] Auto-run: exact match + risk <= local_write + N успехов + scope соблюдён
-- [x] Fuzzy match: никогда auto-run, только подтверждение
-- [x] Path boundary validation (защита от ../../)
-- [x] Отображение подтверждения плана в UI (risk, команды, accept/decline)
-- [x] Индикатор trust level для каждой команды в UI
-- [x] Настройки в UI — окно конфигурации
-- [x] Hash-bound confirmation для exact plan preview/approval
+## Фаза 2. Скриптовая система
 
----
+- [ ] Интерпретатор скриптов (ядро terio, Rust)
+- [ ] Структура: `terio-scripts/core/` (встроенные) + `user/` + `learned/`
+- [ ] Формат скрипта: triggers, steps, show
+- [ ] Перенос help/config/focus/confirm в скрипты
+- [ ] `terio script install`, `terio script list`
+- [ ] Переопределение встроенных скриптов пользователем
 
-## 5. Undo/Redo (Experimental)
+## Фаза 3. Словарь синонимов
 
-- [x] Sandbox (bubblewrap/overlay FS)
-- [x] Warn (только предупреждение)
-- [x] Best-effort snapshot для скриптов
-- [x] `terio undo`, `terio redo`
-- [x] Off by default
-- [x] Кнопки Undo/Redo в UI
+- [ ] Normalize запроса → HashMap<NormalizedQuery, ScriptId>
+- [ ] Автоматическое создание синонимов из успешных LLM-запросов
+- [ ] Редко используемые синонимы → удаление из индекса
+- [ ] `terio alias list` / `terio alias remove`
 
----
+## Фаза 4. Проактивный режим (предугадывание)
 
-## 6. Продвинутый рендеринг + интерактивность
+- [ ] terio смотрит историю и предлагает следующую команду
+- [ ] Автодополнение: `# terio: ls /tmp? [Enter]`
+- [ ] Молчаливое исполнение при точности > 0.95
+- [ ] Окно-лог в углу: «terio: +3 команды»
 
-- [x] Live-stream: LogStore broadcast → Dioxus (вместо poll)
-- [x] Индикатор выполнения — spinner/progress для длительных операций
-- [x] Timeline (git log style)
-- [x] Card view (статусы, риски)
-- [x] Readable page (лог, новости)
-- [x] Авто-выбор renderer на основе display_profile
-- [x] Блок → Window эволюция
-- [x] Чат-окно: последовательность окон
+## Фаза 5. Оптимизация стоимости
 
----
-
-## 7. Интеграции (ленивые)
-
-- [x] Каждая новая программа — через запрос пользователя (`terio learn <program>`)
-- [x] terio учится работать с программами через --help (агент читает --help, пишет integration script)
-- [x] Никаких заранее написанных коннекторов — только динамическое обучение через `IntegrationManager`
-- [x] Integration script → Script Cache (generate_integration_script сохраняет в кеш)
-- [x] Окно интеграции: выбор программы, статус изучения (`terio integrations`, `terio forget`)
-- [x] Шэринг: копирование окон между экземплярами terio (`terio share`, `terio receive`)
-- [x] `terio share`, `terio receive` — экспорт/импорт SharedWindow (LogEntry + cache entries)
-
----
-
-## 8. Оптимизация стоимости
-
-- [ ] Раздельные cost_counters → total_attention_cost
-- [ ] cache vs model: выбор маршрута с минимальной стоимостью
+- [ ] Формула: C_total = C_llm_tokens + C_user_attention + C_risk
+- [ ] Выбор маршрута: скрипт (дёшево) vs LLM (гибко)
 - [ ] `terio cost` — отчёт по затратам
-- [ ] Auto-tuning: предложение отключить auto-run для дорогих скриптов
-- [ ] Pre-execution: read_only шаги до нажатия Enter
-- [ ] Графики стоимости в UI
-- [ ] Предпросмотр (preview) в окне
+- [ ] Байесовский классификатор для точности предсказаний
 
----
+## Фаза 6. Desktop + сообщество
 
-## 9. Desktop + сообщество
-
-- [ ] Локальная LLM: open-source модель
-- [ ] Desktop — standalone-пакет, system tray, автообновление
+- [ ] Локальная LLM (llama.cpp / Ollama)
+- [ ] Desktop-пакет, автообновление
 - [ ] Экспорт/импорт скриптов
-- [ ] Документ = мультиокно: объединение окон, экспорт как документация
-- [ ] Реестр скриптов
+- [ ] Реестр скриптов сообщества

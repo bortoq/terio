@@ -2,7 +2,7 @@
 name = "terio"
 version = "0.1.0"
 edition = "2021"
-description = "Интерфейс-агрегатор с AI-планированием и кешированием скриптов"
+description = "Интегратор интерфейсов: терминал с LLM, кешем скриптов и песочницей"
 license = "Apache-2.0"
 repository = "https://github.com/bortoq/terio"
 
