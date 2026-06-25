@@ -1,9 +1,10 @@
 // terio entry point — Phase 0: terminal-like UI
 
 use clap::Parser;
+use std::sync::Arc;
 use terio::ask::{self, AskResult};
 use terio::cache::ScriptCache;
-use terio::cli::{Cli, Command, ConfigCmd, SandboxCmd};
+use terio::cli::{Cli, Command, ConfigCmd, SandboxCmd, ScriptCmd};
 use terio::config::Config;
 use terio::identity::Identity;
 use terio::log::reader::JsonlLogReader;
@@ -11,6 +12,7 @@ use terio::log::writer::JsonlLogWriter;
 use terio::log::{LogReader, LogStore};
 use terio::provider::create_provider;
 use terio::run;
+use terio::script_engine::{self, CliApiBackend, ScriptEngine};
 #[cfg(feature = "desktop")]
 use terio::ui::state::UiCommand;
 use terio::undo;
@@ -109,6 +111,11 @@ fn main() -> anyhow::Result<()> {
 
         Some(Command::Receive { input }) => {
             handle_receive(&log_dir, &input)?;
+        }
+
+        // --- Phase 2: Script commands ---
+        Some(Command::Script(cmd)) => {
+            handle_script(cmd)?;
         }
 
         // --- Phase 0: Terminal commands ---
@@ -449,6 +456,38 @@ fn handle_repeat(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Resu
         }
         None => {
             eprintln!("terio: нет предыдущих запросов для повторения.");
+        }
+    }
+    Ok(())
+}
+
+fn handle_script(cmd: ScriptCmd) -> anyhow::Result<()> {
+    let dirs = script_engine::default_script_dirs()?;
+    ScriptEngine::ensure_dirs(&dirs)?;
+    let backend = Arc::new(CliApiBackend);
+
+    match cmd {
+        ScriptCmd::List => {
+            let mut engine = ScriptEngine::new(backend);
+            engine.load_all(&dirs)?;
+            println!("=== terio scripts ===");
+            for script in engine.scripts() {
+                let kind = match script.kind {
+                    script_engine::ScriptKind::Builtin => "builtin",
+                    script_engine::ScriptKind::Core => "core",
+                    script_engine::ScriptKind::User => "user",
+                    script_engine::ScriptKind::Learned => "learned",
+                };
+                let triggers = script.triggers.join(", ");
+                println!(
+                    "  {:12} {:12} {}  [{}]",
+                    script.id, kind, script.description, triggers
+                );
+            }
+        }
+        ScriptCmd::Install { path } => {
+            let id = ScriptEngine::install_script(std::path::Path::new(&path), &dirs)?;
+            eprintln!("terio: script '{id}' installed to ~/.terio/scripts/user/");
         }
     }
     Ok(())

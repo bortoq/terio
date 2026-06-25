@@ -115,9 +115,24 @@ pub enum Command {
     /// Повторить последний запрос (Phase 0)
     Repeat,
 
+    /// Управление скриптами (Phase 2)
+    #[command(subcommand)]
+    Script(ScriptCmd),
+
     /// Управление песочницей (Phase 1)
     #[command(subcommand)]
     Sandbox(SandboxCmd),
+}
+
+#[derive(Subcommand)]
+pub enum ScriptCmd {
+    /// Показать список установленных скриптов
+    List,
+    /// Установить скрипт из файла
+    Install {
+        /// Путь к .rhai или .toml файлу
+        path: String,
+    },
 }
 
 #[derive(Subcommand)]

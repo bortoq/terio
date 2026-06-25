@@ -24,6 +24,7 @@ pub mod log;
 
 // Следующие фазы (заглушки)
 pub mod render;
+pub mod script_engine;
 pub mod trust;
 
 #[cfg(test)]

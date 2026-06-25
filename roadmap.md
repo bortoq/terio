@@ -91,12 +91,12 @@ args = ["-la"]
 TOML-файл компилируется в Rhai-скрипт. Пользователь может начать с TOML
 и перейти на Rhai, когда понадобится логика (условия, циклы, вызов terio API).
 
-- [ ] Интерпретатор: `rhai::Engine` + TOML → RhaiAST транслятор
-- [ ] Структура директорий: `terio-scripts/core/` (Rhai), `user/` (Rhai + TOML), `learned/` (TOML)
-- [ ] API для скриптов: `terio::execute()`, `terio::confirm()`, `terio::show()`, `terio::config_get/set()`
-- [ ] Перенос help/config/focus/confirm в скрипты
-- [ ] `terio script install`, `terio script list`
-- [ ] Переопределение встроенных скриптов пользователем
+- [x] Интерпретатор: `rhai::Engine` + TOML → RhaiAST транслятор
+- [x] Структура директорий: `~/.terio/scripts/{core,user,learned}/`
+- [x] API для скриптов: `terio_execute()`, `terio_confirm()`, `terio_show()`, `terio_config_get/set()`
+- [x] Перенос help/mode/focus/scroll/repeat в скрипты (builtin Rhai + TOML demo)
+- [x] `terio script install <file>`, `terio script list`
+- [x] Переопределение встроенных скриптов пользователем (user/ переопределяет core переопределяет builtin)
 
 ## Фаза 3. Словарь синонимов
 
