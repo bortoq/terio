@@ -133,6 +133,14 @@ pub enum ScriptCmd {
         /// Путь к .rhai или .toml файлу
         path: String,
     },
+    /// Запустить скрипт по ID с аргументами
+    Run {
+        /// ID скрипта
+        id: String,
+        /// Аргументы скрипта (после --)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]

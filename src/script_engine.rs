@@ -97,7 +97,7 @@ pub fn toml_to_rhai(toml_str: &str) -> Result<String> {
     }
 
     if let Some(toml::Value::Array(arr)) = table.get("steps") {
-        return Ok(build_rhai_from_steps(arr));
+        return build_rhai_from_steps(arr);
     }
 
     if let Some(toml::Value::Table(step_table)) = table.get("step") {
@@ -139,37 +139,46 @@ fn rhai_esc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn build_rhai_from_steps(steps: &[toml::Value]) -> String {
+fn build_rhai_from_steps(steps: &[toml::Value]) -> Result<String> {
     let mut rhai = String::from("fn main() {\n");
-    for step_val in steps {
-        if let toml::Value::Table(step_table) = step_val {
-            if let Some(cmd) = step_table.get("command").and_then(|v| v.as_str()) {
-                let args: Vec<String> = match step_table.get("args") {
-                    Some(toml::Value::Array(a)) => a
-                        .iter()
-                        .filter_map(|v| match v {
-                            toml::Value::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                let args_lit = args
-                    .iter()
-                    .map(|a| format!("\"{}\"", rhai_esc(a)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                rhai.push_str(&format!(
-                    "    let result = terio_execute(\"{}\", [{}]);\n",
-                    rhai_esc(cmd),
-                    args_lit,
-                ));
-                rhai.push_str("    terio_show(result);\n");
-            }
-        }
+    for (i, step_val) in steps.iter().enumerate() {
+        let step_table = match step_val {
+            toml::Value::Table(t) => t,
+            other => bail!("steps[{}] is not a table: {:?}", i, other),
+        };
+        let cmd = step_table
+            .get("command")
+            .and_then(|v| v.as_str())
+            .with_context(|| format!("steps[{}] missing 'command' string", i))?;
+        let args: Vec<String> = match step_table.get("args") {
+            Some(toml::Value::Array(a)) => a
+                .iter()
+                .map(|v| match v {
+                    toml::Value::String(s) => Ok(s.clone()),
+                    other => Err(anyhow::anyhow!(
+                        "steps[{}] arg is not string: {:?}",
+                        i,
+                        other
+                    )),
+                })
+                .collect::<Result<Vec<_>>>()?,
+            None => Vec::new(),
+            Some(other) => bail!("steps[{}] args is not array: {:?}", i, other),
+        };
+        let args_lit = args
+            .iter()
+            .map(|a| format!("\"{}\"", rhai_esc(a)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        rhai.push_str(&format!(
+            "    let result = terio_execute(\"{}\", [{}]);\n",
+            rhai_esc(cmd),
+            args_lit,
+        ));
+        rhai.push_str("    terio_show(result);\n");
     }
     rhai.push_str("}\n");
-    rhai
+    Ok(rhai)
 }
 
 fn build_rhai_single(cmd: &str, args: &[String]) -> String {
@@ -197,11 +206,7 @@ pub fn builtin_scripts() -> Vec<Script> {
         },
         Script {
             id: "mode".into(),
-            triggers: vec![
-                "mode quiet".into(),
-                "mode normal".into(),
-                "mode debug".into(),
-            ],
+            triggers: vec!["mode".into()],
             source: ScriptSource::Rhai(BUILTIN_MODE.into()),
             kind: ScriptKind::Builtin,
             description: "Set attention mode: quiet | normal | debug".into(),
@@ -516,47 +521,59 @@ impl ScriptEngine {
             .compile(&rhai_source)
             .with_context(|| format!("failed to compile script '{}'", script.id))?;
 
-        // Удаляем предыдущий скрипт с таким же id (для переопределения)
-        self.scripts.retain(|s| s.id != script.id);
+        // Remove lower-priority scripts that share triggers with the new one.
+        // Priority: User > Core > Learned > Builtin.
+        self.scripts.retain(|s| {
+            if s.id == script.id {
+                return false; // same id: override
+            }
+            // If new script has higher kind and shares a trigger, remove the old one.
+            if script.kind > s.kind {
+                let overlap: bool = s
+                    .triggers
+                    .iter()
+                    .any(|st| script.triggers.iter().any(|nt| nt.eq_ignore_ascii_case(st)));
+                if overlap {
+                    return false;
+                }
+            }
+            true
+        });
 
         self.scripts.push(script);
+
+        // Keep scripts sorted by kind descending so match_input finds highest priority first.
+        self.scripts.sort_by_key(|b| std::cmp::Reverse(b.kind));
+
         Ok(())
     }
 
     /// Найти скрипт по вводу пользователя (сопоставление trigger).
     /// Возвращает (Script, remaining_args), где remaining_args — часть ввода после команды.
+    /// Trigger matching — case-insensitive; аргументы сохраняют оригинальный регистр.
     pub fn match_input(&self, input: &str) -> Option<(&Script, Vec<String>)> {
-        let input_lower = input.to_lowercase().trim().to_string();
+        let input_trimmed = input.trim();
+        let input_lower = input_trimmed.to_lowercase();
 
-        // Сначала ищем точное совпадение (полный trigger)
-        for script in &self.scripts {
-            for trigger in &script.triggers {
-                if input_lower == trigger.to_lowercase() {
-                    return Some((script, Vec::new()));
-                }
-            }
-        }
-
-        // Затем ищем по первому слову (команда с аргументами)
-        let first_word = input_lower.split_whitespace().next().unwrap_or("");
+        // Scripts already sorted by kind desc (User > Core > Learned > Builtin).
+        // First-found wins within same kind.
         for script in &self.scripts {
             for trigger in &script.triggers {
                 let trigger_lower = trigger.to_lowercase();
-                // trigger может быть "mode quiet" — сравниваем полностью
-                // или "mode" — тогда остаток — аргументы
-                if first_word == trigger_lower {
-                    let args: Vec<String> = input_lower
-                        .split_whitespace()
-                        .skip(1)
-                        .map(|s| s.to_string())
-                        .collect();
-                    return Some((script, args));
+
+                // 1) Exact match: full trigger equals full input
+                if input_lower == trigger_lower {
+                    return Some((script, Vec::new()));
                 }
-                // Сравниваем по полному trigger как команде с аргументами
-                if input_lower.starts_with(&format!("{} ", trigger_lower)) {
-                    let args: Vec<String> = input_lower
+
+                // 2) Prefix match: input starts with trigger + space
+                //    Remaining words = args (preserve original case)
+                let prefix = format!("{} ", trigger_lower);
+                if input_lower.starts_with(&prefix) {
+                    let consumed = trigger_lower.split_whitespace().count();
+                    let args: Vec<String> = input_trimmed
                         .split_whitespace()
-                        .skip(trigger_lower.split_whitespace().count())
+                        .skip(consumed)
                         .map(|s| s.to_string())
                         .collect();
                     return Some((script, args));
@@ -596,6 +613,17 @@ impl ScriptEngine {
 
         let output = self.output_buffer.lock().unwrap().join("\n");
         Ok(output)
+    }
+
+    /// Выполнить скрипт по его ID.
+    pub fn run_script_by_id(&mut self, id: &str, args: Vec<String>) -> Result<String> {
+        let idx = self
+            .scripts
+            .iter()
+            .position(|s| s.id == id)
+            .with_context(|| format!("script '{}' not found", id))?;
+        let script = self.scripts[idx].clone();
+        self.execute_script(&script, args)
     }
 
     /// Добавить в буфер вывода (вызывается из API).
@@ -748,6 +776,25 @@ impl ScriptApiBackend for CliApiBackend {
         let full_cmd: Vec<String> = std::iter::once(cmd.to_string())
             .chain(args.iter().cloned())
             .collect();
+        // Basic risk check: warn user for dangerous commands
+        let risk = crate::run::compute_risk(&full_cmd[0], &full_cmd[1..]);
+        if matches!(
+            risk,
+            crate::types::RiskLevel::Destructive | crate::types::RiskLevel::NetworkWrite
+        ) {
+            eprintln!(
+                "⚠️  WARNING: script is executing a risky command: {}",
+                full_cmd.join(" ")
+            );
+            eprint!("Proceed? [y/N]: ");
+            use std::io::Write;
+            std::io::stderr().flush()?;
+            let mut reply = String::new();
+            std::io::stdin().read_line(&mut reply)?;
+            if !reply.trim().eq_ignore_ascii_case("y") {
+                bail!("script command cancelled by user");
+            }
+        }
         let result = crate::run::execute(&full_cmd)?;
         let mut output = result.stdout;
         if !result.stderr.is_empty() {

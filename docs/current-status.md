@@ -1,6 +1,6 @@
 # Current implementation status
 
-После коммита `9e0bbf3` (Phase 0: terminal-like UI + window model).
+После коммита `1d7b6d3` (Phase 2: Script system + audit fixes).
 
 ---
 
@@ -28,6 +28,9 @@
 | `terio scroll <N>` | `src/main.rs` | Скролл (UI) |
 | `terio repeat` | `src/main.rs` | Повтор последнего запроса |
 | `terio sandbox status` | `src/main.rs` | Состояние песочницы |
+| `terio script list` | `src/main.rs` | Список скриптов |
+| `terio script install <file>` | `src/main.rs` | Установить скрипт |
+| `terio script run <id> [args]` | `src/main.rs` | Запустить скрипт |
 
 ### CLI (экспериментально)
 

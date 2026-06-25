@@ -36,7 +36,15 @@ fn main() -> anyhow::Result<()> {
         }
 
         Some(Command::Ask { request, yes }) => {
-            handle_ask(&identity, &log_dir, &request, yes)?;
+            if !yes {
+                if let Some(true) = try_script_command(&request)? {
+                    // handled by script
+                } else {
+                    handle_ask(&identity, &log_dir, &request, yes)?;
+                }
+            } else {
+                handle_ask(&identity, &log_dir, &request, yes)?;
+            }
         }
 
         Some(Command::Log { json }) => {
@@ -118,25 +126,46 @@ fn main() -> anyhow::Result<()> {
             handle_script(cmd)?;
         }
 
-        // --- Phase 0: Terminal commands ---
+        // --- Phase 0: Terminal commands (routed through ScriptEngine) ---
         Some(Command::Help) => {
-            print_help();
+            if let Some(true) = try_script_command("help")? {
+                // handled by script
+            } else {
+                print_help();
+            }
         }
 
         Some(Command::Mode { mode }) => {
-            handle_mode(&mode)?;
+            // Route through script: "mode <value>"
+            if try_script_command(&format!("mode {mode}"))? == Some(true) {
+                // handled by script
+            } else {
+                handle_mode(&mode)?;
+            }
         }
 
         Some(Command::Focus { direction }) => {
-            handle_focus(&direction);
+            if try_script_command(&format!("focus {direction}"))? == Some(true) {
+                // handled by script
+            } else {
+                handle_focus(&direction);
+            }
         }
 
         Some(Command::Scroll { lines }) => {
-            handle_scroll(lines);
+            if try_script_command(&format!("scroll {lines}"))? == Some(true) {
+                // handled by script
+            } else {
+                handle_scroll(lines);
+            }
         }
 
         Some(Command::Repeat) => {
-            handle_repeat(&identity, &log_dir)?;
+            if try_script_command("repeat")? == Some(true) {
+                // handled by script
+            } else {
+                handle_repeat(&identity, &log_dir)?;
+            }
         }
 
         Some(Command::Sandbox(cmd)) => {
@@ -461,6 +490,39 @@ fn handle_repeat(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Resu
     Ok(())
 }
 
+/// Создать ScriptEngine с default backend и загрузить все скрипты.
+fn create_script_engine() -> anyhow::Result<script_engine::ScriptEngine> {
+    let dirs = script_engine::default_script_dirs()?;
+    ScriptEngine::ensure_dirs(&dirs)?;
+    let backend = std::sync::Arc::new(CliApiBackend);
+    let mut engine = ScriptEngine::new(backend);
+    engine.load_all(&dirs)?;
+    Ok(engine)
+}
+
+/// Попробовать обработать команду через скрипты.
+/// Возвращает Some(true) если скрипт выполнен, Some(false) если скрипты не загрузились,
+/// None если нет подходящего скрипта.
+fn try_script_command(input: &str) -> anyhow::Result<Option<bool>> {
+    let mut engine = match create_script_engine() {
+        Ok(e) => e,
+        Err(_) => return Ok(Some(false)),
+    };
+    // Clone script and args to avoid borrow conflict with execute_script
+    let matched: Option<(script_engine::Script, Vec<String>)> =
+        engine.match_input(input).map(|(s, a)| (s.clone(), a));
+    match matched {
+        Some((script, args)) => {
+            let output = engine.execute_script(&script, args)?;
+            if !output.is_empty() {
+                println!("{output}");
+            }
+            Ok(Some(true))
+        }
+        None => Ok(None),
+    }
+}
+
 fn handle_script(cmd: ScriptCmd) -> anyhow::Result<()> {
     let dirs = script_engine::default_script_dirs()?;
     ScriptEngine::ensure_dirs(&dirs)?;
@@ -488,6 +550,14 @@ fn handle_script(cmd: ScriptCmd) -> anyhow::Result<()> {
         ScriptCmd::Install { path } => {
             let id = ScriptEngine::install_script(std::path::Path::new(&path), &dirs)?;
             eprintln!("terio: script '{id}' installed to ~/.terio/scripts/user/");
+        }
+        ScriptCmd::Run { id, args } => {
+            let mut engine = ScriptEngine::new(backend);
+            engine.load_all(&dirs)?;
+            let output = engine.run_script_by_id(&id, args)?;
+            if !output.is_empty() {
+                println!("{output}");
+            }
         }
     }
     Ok(())
