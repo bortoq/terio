@@ -59,6 +59,37 @@ pub enum Command {
     /// Управление настройками
     #[command(subcommand)]
     Config(ConfigCmd),
+
+    /// (Phase 7) Обучиться работе с программой через --help
+    Learn {
+        /// Имя программы (например, git, docker)
+        program: String,
+    },
+
+    /// (Phase 7) Показать статус изученных программ
+    Integrations,
+
+    /// (Phase 7) Забыть изученную программу
+    Forget {
+        /// Имя программы
+        program: String,
+    },
+
+    /// (Phase 7) Экспортировать окно для передачи другому экземпляру
+    Share {
+        /// Путь для сохранения JSON (по умолчанию stdout)
+        output: Option<String>,
+
+        /// Количество последних записей для экспорта
+        #[arg(long, default_value = "50")]
+        count: usize,
+    },
+
+    /// (Phase 7) Импортировать окно из другого экземпляра
+    Receive {
+        /// Путь к JSON-файлу или "-" для stdin
+        input: String,
+    },
 }
 
 #[derive(Subcommand)]

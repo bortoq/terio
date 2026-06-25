@@ -29,7 +29,7 @@ pub enum TrustMatchKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustEvaluation {
     pub policy: TrustPolicy,
     pub match_kind: TrustMatchKind,

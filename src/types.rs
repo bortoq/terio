@@ -61,7 +61,7 @@ pub enum RendererHint {
 // DisplayProfile
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DisplayProfile {
     #[serde(rename = "type")]
     pub display_type: DisplayType,
@@ -86,7 +86,7 @@ impl Default for DisplayProfile {
 // CostCounters
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservationCostHint {
     pub user_sec: f64,
 }
@@ -97,13 +97,13 @@ impl Default for ObservationCostHint {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LlmCost {
     pub tokens: u64,
     pub duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionCost {
     pub duration_ms: u64,
     pub commands_executed: u64,
@@ -111,19 +111,19 @@ pub struct ExecutionCost {
     pub bytes_written: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CacheCost {
     pub lookup_ms: u64,
     pub hit: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StorageCost {
     pub bytes_written: u64,
     pub bytes_read: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CostCounters {
     pub observation_cost_hint: ObservationCostHint,
     pub llm_cost: LlmCost,
@@ -136,13 +136,13 @@ pub struct CostCounters {
 // CommandInfo & StepInfo
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommandInfo {
     pub display: String,
     pub argv: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepInfo {
     pub command: String,
     pub argv: Vec<String>,
@@ -153,7 +153,7 @@ pub struct StepInfo {
 // LogEntry — основная запись лога
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogEntry {
     // Required common fields
     pub schema_version: u32,

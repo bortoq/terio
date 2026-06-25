@@ -16,7 +16,7 @@ use terio::ui::app::UiCommand;
 use terio::undo;
 
 fn main() -> anyhow::Result<()> {
-    // Signal handler для Ctrl+C — ДО任何 другой инициализации
+    // Signal handler для Ctrl+C — ДО любой другой инициализации
     run::setup_ctrlc_handler();
 
     let cli = Cli::parse();
@@ -90,6 +90,26 @@ fn main() -> anyhow::Result<()> {
                     eprintln!("terio: config {key} установлен.");
                 }
             }
+        }
+
+        Some(Command::Learn { program }) => {
+            handle_learn(&program)?;
+        }
+
+        Some(Command::Integrations) => {
+            handle_integrations()?;
+        }
+
+        Some(Command::Forget { program }) => {
+            handle_forget(&program)?;
+        }
+
+        Some(Command::Share { output, count }) => {
+            handle_share(&log_dir, output.as_deref(), count)?;
+        }
+
+        Some(Command::Receive { input }) => {
+            handle_receive(&log_dir, &input)?;
         }
     }
 
@@ -256,6 +276,88 @@ fn handle_redo(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Result
         None => eprintln!("terio: нет доступного redo."),
     }
     store.flush()?;
+    Ok(())
+}
+
+/// Phase 7: Learn a program via --help
+fn handle_learn(program: &str) -> anyhow::Result<()> {
+    let mut mgr = terio::integration::IntegrationManager::new()?;
+    eprintln!("terio: learning '{}'...", program);
+    let record = mgr.learn_program(program)?;
+    match &record.status {
+        terio::integration::LearningStatus::Learned => {
+            eprintln!("terio: learned '{}' ✓", program);
+            if let Some(snippet) = &record.help_snippet {
+                let preview: String = snippet.chars().take(200).collect();
+                println!("{}", preview);
+            }
+        }
+        terio::integration::LearningStatus::Failed(reason) => {
+            eprintln!("terio: failed to learn '{}': {}", program, reason);
+        }
+        _ => {
+            eprintln!("terio: learning '{}' in unexpected state", program);
+        }
+    }
+    Ok(())
+}
+
+/// Phase 7: Show integration status
+fn handle_integrations() -> anyhow::Result<()> {
+    let mgr = terio::integration::IntegrationManager::new()?;
+    terio::integration::print_integration_status(&mgr);
+    Ok(())
+}
+
+/// Phase 7: Forget a program
+fn handle_forget(program: &str) -> anyhow::Result<()> {
+    let mut mgr = terio::integration::IntegrationManager::new()?;
+    mgr.forget_program(program)?;
+    eprintln!("terio: forgot '{}'", program);
+    Ok(())
+}
+
+/// Phase 7: Share window data
+fn handle_share(
+    log_dir: &std::path::Path,
+    output: Option<&str>,
+    count: usize,
+) -> anyhow::Result<()> {
+    let reader = JsonlLogReader::new(log_dir);
+    let entries = reader.recent(count)?;
+    let cache = ScriptCache::new()?;
+    let json = terio::integration::export_share_data(entries, &cache)?;
+
+    match output {
+        Some(path) => {
+            std::fs::write(path, &json)?;
+            eprintln!("terio: shared window saved to {}", path);
+        }
+        None => {
+            println!("{}", json);
+        }
+    }
+    Ok(())
+}
+
+/// Phase 7: Receive shared window data
+fn handle_receive(log_dir: &std::path::Path, input: &str) -> anyhow::Result<()> {
+    let json_data = if input == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(input)
+            .map_err(|e| anyhow::anyhow!("failed to read {}: {}", input, e))?
+    };
+
+    let writer = Box::new(JsonlLogWriter::new(log_dir)?);
+    let reader = Box::new(JsonlLogReader::new(log_dir));
+    let store = LogStore::new(writer, reader, 256);
+
+    let count = terio::integration::import_share_data(&json_data, &store)?;
+    eprintln!("terio: received {} entries from shared window", count);
     Ok(())
 }
 

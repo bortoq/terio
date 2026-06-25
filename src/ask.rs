@@ -17,20 +17,20 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// Результат обработки запроса.
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub enum PendingSource {
     Cache,
     Agent,
 }
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct PendingCommand {
     pub argv: Vec<String>,
     pub risk: RiskLevel,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct PendingPlanSummary {
     pub request: String,
     pub summary: String,
@@ -40,7 +40,7 @@ pub struct PendingPlanSummary {
     pub commands: Vec<PendingCommand>,
 }
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct PendingConfirmationState {
     pub plan_hash: String,
     pub source: PendingSource,

@@ -113,14 +113,13 @@
 
 ## 7. Интеграции (ленивые)
 
-- [ ] Каждая новая программа — через запрос пользователя
-- [ ] terio учится работать с Git, GitHub, медиа, Docker
-- [ ] Никаких заранее написанных коннекторов
-- [ ] Агент читает --help/man/wiki, пишет integration script
-- [ ] Integration script → Script Cache
-- [ ] Окно интеграции: выбор программы, статус изучения
-- [ ] Шэринг: копирование окон между экземплярами terio
-- [ ] `terio share`, `terio receive`
+- [x] Каждая новая программа — через запрос пользователя (`terio learn <program>`)
+- [x] terio учится работать с программами через --help (агент читает --help, пишет integration script)
+- [x] Никаких заранее написанных коннекторов — только динамическое обучение через `IntegrationManager`
+- [x] Integration script → Script Cache (generate_integration_script сохраняет в кеш)
+- [x] Окно интеграции: выбор программы, статус изучения (`terio integrations`, `terio forget`)
+- [x] Шэринг: копирование окон между экземплярами terio (`terio share`, `terio receive`)
+- [x] `terio share`, `terio receive` — экспорт/импорт SharedWindow (LogEntry + cache entries)
 
 ---
 

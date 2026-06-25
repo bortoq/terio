@@ -8,6 +8,7 @@ pub mod agent;
 pub mod ask;
 pub mod cache;
 pub mod identity;
+pub mod integration;
 pub mod matcher;
 pub mod provider;
 pub mod redact;
