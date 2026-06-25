@@ -1,4 +1,4 @@
-// terio entry point
+// terio entry point — Phase 0: terminal-like UI
 
 use clap::Parser;
 use terio::ask::{self, AskResult};
@@ -12,11 +12,12 @@ use terio::log::{LogReader, LogStore};
 use terio::provider::create_provider;
 use terio::run;
 #[cfg(feature = "desktop")]
-use terio::ui::app::UiCommand;
+use terio::ui::state::UiCommand;
 use terio::undo;
+#[allow(unused_imports)]
+use terio::window;
 
 fn main() -> anyhow::Result<()> {
-    // Signal handler для Ctrl+C — ДО любой другой инициализации
     run::setup_ctrlc_handler();
 
     let cli = Cli::parse();
@@ -39,7 +40,6 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Log { json }) => {
             let reader = JsonlLogReader::new(&log_dir);
             let entries = reader.recent(50)?;
-
             if json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {
@@ -50,7 +50,6 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Stats) => {
             let reader = JsonlLogReader::new(&log_dir);
             let stats = ask::compute_stats(&reader)?;
-
             println!("Model calls:   {}", stats.model_calls);
             println!("Cache hits:    {}", stats.cache_hits);
             println!("Tokens total:  {}", stats.total_tokens);
@@ -111,10 +110,35 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Receive { input }) => {
             handle_receive(&log_dir, &input)?;
         }
+
+        // --- Phase 0: Terminal commands ---
+        Some(Command::Help) => {
+            print_help();
+        }
+
+        Some(Command::Mode { mode }) => {
+            handle_mode(&mode)?;
+        }
+
+        Some(Command::Focus { direction }) => {
+            handle_focus(&direction);
+        }
+
+        Some(Command::Scroll { lines }) => {
+            handle_scroll(lines);
+        }
+
+        Some(Command::Repeat) => {
+            handle_repeat(&identity, &log_dir)?;
+        }
     }
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Existing handlers (unchanged)
+// ---------------------------------------------------------------------------
 
 fn handle_run(
     identity: &Identity,
@@ -126,7 +150,6 @@ fn handle_run(
         std::process::exit(1);
     }
 
-    // Предупреждение для destructive/network_write/credential_access
     let risk = run::compute_risk(&command[0], &command[1..]);
     if risk == terio::types::RiskLevel::Destructive {
         eprintln!("⚠️  ВНИМАНИЕ: destructive команда: {}", command.join(" "));
@@ -147,15 +170,12 @@ fn handle_run(
     let result = match run::execute(command) {
         Ok(r) => r,
         Err(e) => {
-            // Логируем failed spawn
             let writer = Box::new(JsonlLogWriter::new(log_dir)?);
             let reader = Box::new(JsonlLogReader::new(log_dir));
             let store = LogStore::new(writer, reader, 256);
-
             let interaction_id = Identity::new_interaction_id();
             let request = command.join(" ");
             let cwd = std::env::current_dir()?.to_string_lossy().to_string();
-
             let entry = run::make_spawn_failed_entry(
                 &identity.instance_id,
                 &identity.session_id,
@@ -167,7 +187,6 @@ fn handle_run(
             );
             store.append(entry)?;
             store.flush()?;
-
             eprintln!("error: {e}");
             std::process::exit(127);
         }
@@ -181,7 +200,6 @@ fn handle_run(
     let interaction_id = Identity::new_interaction_id();
     let request = command.join(" ");
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
-
     let entry = run::make_command_run_entry(
         &identity.instance_id,
         &identity.session_id,
@@ -212,15 +230,12 @@ fn handle_ask(
     let writer = Box::new(JsonlLogWriter::new(log_dir)?);
     let reader = Box::new(JsonlLogReader::new(log_dir));
     let store = LogStore::new(writer, reader, 256);
-
     let provider = create_provider(&config.provider);
-
     render_ask_result(
         ask::process_request(request, identity, &store, &cache, &*provider, yes)?,
         &store,
         request,
     )?;
-
     store.flush()?;
     Ok(())
 }
@@ -230,13 +245,11 @@ fn handle_confirm(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Res
     let writer = Box::new(JsonlLogWriter::new(log_dir)?);
     let reader = Box::new(JsonlLogReader::new(log_dir));
     let store = LogStore::new(writer, reader, 256);
-
     render_ask_result(
         ask::confirm_pending(identity, &store, &cache)?,
         &store,
         "<pending>",
     )?;
-
     store.flush()?;
     Ok(())
 }
@@ -279,7 +292,6 @@ fn handle_redo(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Result
     Ok(())
 }
 
-/// Phase 7: Learn a program via --help
 fn handle_learn(program: &str) -> anyhow::Result<()> {
     let mut mgr = terio::integration::IntegrationManager::new()?;
     eprintln!("terio: learning '{}'...", program);
@@ -302,14 +314,12 @@ fn handle_learn(program: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Phase 7: Show integration status
 fn handle_integrations() -> anyhow::Result<()> {
     let mgr = terio::integration::IntegrationManager::new()?;
     terio::integration::print_integration_status(&mgr);
     Ok(())
 }
 
-/// Phase 7: Forget a program
 fn handle_forget(program: &str) -> anyhow::Result<()> {
     let mut mgr = terio::integration::IntegrationManager::new()?;
     mgr.forget_program(program)?;
@@ -317,7 +327,6 @@ fn handle_forget(program: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Phase 7: Share window data
 fn handle_share(
     log_dir: &std::path::Path,
     output: Option<&str>,
@@ -327,20 +336,16 @@ fn handle_share(
     let entries = reader.recent(count)?;
     let cache = ScriptCache::new()?;
     let json = terio::integration::export_share_data(entries, &cache)?;
-
     match output {
         Some(path) => {
             std::fs::write(path, &json)?;
             eprintln!("terio: shared window saved to {}", path);
         }
-        None => {
-            println!("{}", json);
-        }
+        None => println!("{}", json),
     }
     Ok(())
 }
 
-/// Phase 7: Receive shared window data
 fn handle_receive(log_dir: &std::path::Path, input: &str) -> anyhow::Result<()> {
     let json_data = if input == "-" {
         use std::io::Read;
@@ -351,15 +356,103 @@ fn handle_receive(log_dir: &std::path::Path, input: &str) -> anyhow::Result<()> 
         std::fs::read_to_string(input)
             .map_err(|e| anyhow::anyhow!("failed to read {}: {}", input, e))?
     };
-
     let writer = Box::new(JsonlLogWriter::new(log_dir)?);
     let reader = Box::new(JsonlLogReader::new(log_dir));
     let store = LogStore::new(writer, reader, 256);
-
     let count = terio::integration::import_share_data(&json_data, &store)?;
     eprintln!("terio: received {} entries from shared window", count);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Phase 0: new handlers
+// ---------------------------------------------------------------------------
+
+fn print_help() {
+    println!("terio — интегратор интерфейсов");
+    println!();
+    println!("Использование: terio [КОМАНДА]");
+    println!();
+    println!("Команды:");
+    println!("  ask <запрос>        запрос на естественном языке");
+    println!("  run -- <команда>    выполнить shell-команду");
+    println!("  log [--json]        показать лог");
+    println!("  stats               метрики и cost_counters");
+    println!("  confirm             подтвердить ожидающий план");
+    println!("  undo                откатить последнюю операцию");
+    println!("  redo                повторить отменённую операцию");
+    println!("  cancel              отменить текущую операцию");
+    println!("  config show         показать настройки");
+    println!("  config set <key> <val>  установить настройку");
+    println!("  learn <program>     обучить интеграцию");
+    println!("  integrations        статус интеграций");
+    println!("  forget <program>    забыть интеграцию");
+    println!("  share [file]        экспорт окна");
+    println!("  receive <file>      импорт окна");
+    println!("  mode <mode>         режим внимания: quiet | normal | debug");
+    println!("  focus <up|down>     переключить окно вывода (UI)");
+    println!("  scroll <N>          прокрутить окна (UI)");
+    println!("  repeat              повторить последний запрос");
+    println!("  help                эта справка");
+    println!("  ui                  открыть UI (по умолчанию)");
+    println!();
+    println!("Подробнее: https://github.com/bortoq/terio");
+}
+
+fn handle_mode(mode: &str) -> anyhow::Result<()> {
+    let mut config = Config::load().unwrap_or_default();
+    match mode {
+        "quiet" | "normal" | "debug" => {
+            config.set("attention_mode", mode)?;
+            config.save()?;
+            eprintln!("terio: режим внимания: {}", mode);
+        }
+        other => {
+            anyhow::bail!("неизвестный режим: {other}. Используйте: quiet, normal, debug");
+        }
+    }
+    Ok(())
+}
+
+fn handle_focus(direction: &str) {
+    match direction {
+        "up" | "down" | "↑" | "↓" => {
+            // В CLI-режиме фокус не имеет смысла — направляем в UI
+            eprintln!("terio: переключение фокуса работает в UI. Запустите terio без аргументов.");
+        }
+        _ => {
+            eprintln!("terio: используйте focus up или focus down");
+        }
+    }
+}
+
+fn handle_scroll(lines: i32) {
+    if lines != 0 {
+        eprintln!("terio: скролл работает в UI. Запустите terio без аргументов.");
+    }
+}
+
+fn handle_repeat(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Result<()> {
+    // Загружаем последние записи и ищем последний user request
+    let reader = JsonlLogReader::new(log_dir);
+    let entries = reader.recent(50)?;
+    let last_req: Option<String> = entries.iter().rev().find_map(|e| e.request.clone());
+
+    match last_req {
+        Some(ref request) => {
+            eprintln!("terio: повтор запроса: \"{}\"", request);
+            handle_ask(identity, log_dir, request, false)?;
+        }
+        None => {
+            eprintln!("terio: нет предыдущих запросов для повторения.");
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
 fn append_system_event(
     identity: &Identity,
@@ -634,6 +727,40 @@ fn process_one_ui_command(
                 append_system_event(identity, store, "no redo available")?;
             }
         },
+        UiCommand::Focus(direction) => {
+            append_system_event(identity, store, &format!("focus {direction}"))?;
+        }
+        UiCommand::Scroll(lines) => {
+            append_system_event(identity, store, &format!("scroll {lines}"))?;
+        }
+        UiCommand::Repeat => {
+            let entries = store.recent(50)?;
+            let last_req = entries.iter().rev().find_map(|e| e.request.clone());
+            if let Some(request) = last_req {
+                append_system_event(identity, store, &format!("repeat: {request}"))?;
+                let config = Config::load().unwrap_or_default();
+                let cache = ScriptCache::new()?;
+                let provider = create_provider(&config.provider);
+                if let AskResult::PendingConfirmation {
+                    plan_hash,
+                    source,
+                    plan_summary,
+                    execution,
+                } = ask::process_request(&request, identity, store, &cache, &*provider, false)?
+                {
+                    ask::save_pending_confirmation(
+                        &ask::PendingConfirmationState {
+                            plan_hash,
+                            source,
+                            plan_summary: plan_summary.clone(),
+                        },
+                        &execution,
+                    )?;
+                }
+            } else {
+                append_system_event(identity, store, "no requests to repeat")?;
+            }
+        }
     }
     store.flush()?;
     Ok(())

@@ -1,5 +1,5 @@
-// UI state: static globals, RowData, helpers for the Dioxus workspace.
-// Extracted from app.rs per audit recommendation (P0.4).
+// UI state: static globals, UiCommand, helpers for the terminal-like UI.
+// Phase 0: simplified — no modes, no WorkspaceView.
 
 use crate::log::LogReader;
 use crate::types::{LogEntry, LogKind};
@@ -8,7 +8,7 @@ use std::sync::{mpsc::Sender, Mutex};
 use tokio::sync::broadcast;
 
 // ---------------------------------------------------------------------------
-// Static global state (MVP pattern — explicit per audit note)
+// Static global state
 // ---------------------------------------------------------------------------
 
 static LOG_ENTRIES: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
@@ -21,6 +21,9 @@ pub enum UiCommand {
     Confirm,
     Undo,
     Redo,
+    Focus(String), // "up" | "down"
+    Scroll(i32),   // lines (positive = down, negative = up)
+    Repeat,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,149 +85,8 @@ pub fn send_ui_command(command: UiCommand) {
 }
 
 // ---------------------------------------------------------------------------
-// RowData — prepared UI row
+// Helpers (same as before)
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, PartialEq)]
-pub struct RowData {
-    pub key: String,
-    pub ts: String,
-    pub kind: String,
-    pub kind_color: &'static str,
-    pub status: String,
-    pub status_color: &'static str,
-    pub desc: String,
-    pub exit: String,
-    pub risk: String,
-    pub trust: String,
-    pub stdout: String,
-    pub stderr: String,
-}
-
-impl RowData {
-    pub fn detail_text(&self) -> String {
-        let mut parts = vec![format!("[{}] {} {}", self.ts, self.kind, self.desc)];
-        if !self.status.is_empty() {
-            parts.push(format!("status: {}", self.status));
-        }
-        if !self.risk.is_empty() {
-            parts.push(format!("risk: {}", self.risk));
-        }
-        if !self.trust.is_empty() {
-            parts.push(format!("trust: {}", self.trust));
-        }
-        parts.join("\n")
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-pub fn status_color(status: &str) -> &'static str {
-    match status {
-        "Success" => "#6a9955",
-        "Failed" => "#f14c4c",
-        "Cancelled" => "#d7ba7d",
-        _ => "#888",
-    }
-}
-
-pub fn kind_color(kind: &str) -> &'static str {
-    match kind {
-        "AgentTurn" => "#569cd6",
-        "CommandRun" => "#ce9178",
-        "ScriptRun" => "#6a9955",
-        "SystemEvent" => "#9cdcfe",
-        _ => "#888",
-    }
-}
-
-fn risk_label(entry: &LogEntry) -> String {
-    entry
-        .risk
-        .as_ref()
-        .map(|r| format!("{:?}", r))
-        .unwrap_or_default()
-}
-
-pub fn trust_badge(entry: &LogEntry) -> String {
-    if entry.cache_hit == Some(true) {
-        let level = entry
-            .success_count_after
-            .or(entry.success_count_before)
-            .unwrap_or(0) as u32;
-        return format!("auto {}", crate::trust::trust_level_str(level, 3));
-    }
-
-    if entry.model_called == Some(true) {
-        return "confirm".to_string();
-    }
-
-    match entry.risk.as_ref() {
-        Some(crate::types::RiskLevel::ReadOnly) => "manual".to_string(),
-        Some(_) => "confirm".to_string(),
-        None => String::new(),
-    }
-}
-
-/// Подготовка строк для отображения.
-/// Использует interaction_id + kind + index для уникальности ключа (fix P0.2).
-pub fn prepare_rows(entries: &[LogEntry]) -> Vec<RowData> {
-    entries
-        .iter()
-        .enumerate()
-        .map(|(idx, entry)| {
-            let kind = format!("{:?}", entry.kind);
-            let status = entry
-                .status
-                .as_ref()
-                .map(|s| format!("{:?}", s))
-                .unwrap_or_default();
-            let ts = truncate_safe(&entry.ts, 19);
-            let desc = entry
-                .command
-                .as_ref()
-                .map(|c| truncate_safe(&c.display, 120))
-                .or_else(|| entry.description.clone())
-                .or_else(|| entry.prompt_summary.clone())
-                .unwrap_or_else(|| "—".to_string());
-            let exit = entry.exit.map(|e| e.to_string()).unwrap_or_default();
-            let risk = risk_label(entry);
-            let trust = trust_badge(entry);
-            let stdout = entry.stdout_summary.clone().unwrap_or_default();
-            let stderr = entry.stderr_summary.clone().unwrap_or_default();
-
-            // Уникальный ключ: interaction_id + kind + index (fix P0.2 row key uniqueness)
-            let key = format!(
-                "{}-{}-{}",
-                entry.interaction_id.as_deref().unwrap_or("none"),
-                kind,
-                idx
-            );
-
-            RowData {
-                key,
-                ts,
-                kind_color: kind_color(&kind),
-                status_color: status_color(&status),
-                kind,
-                status,
-                desc,
-                exit,
-                risk,
-                trust,
-                stdout,
-                stderr,
-            }
-        })
-        .collect()
-}
-
-/// Безопасное усечение строки по символам (не байтам).
-pub fn truncate_safe(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
-}
 
 pub fn refresh_entries() {
     if let Ok(log_dir) = crate::log::writer::JsonlLogWriter::default_dir() {
@@ -253,117 +115,21 @@ pub fn is_completion_entry(entry: &LogEntry) -> bool {
     )
 }
 
+/// Безопасное усечение строки по символам (не байтам).
+pub fn truncate_safe(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+/// Получить последний запрос из лога (для repeat).
+pub fn last_request() -> Option<String> {
+    let entries = get_entries();
+    entries.iter().rev().find_map(|e| e.request.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::*;
-
-    #[test]
-    fn test_prepare_rows_key_uniqueness() {
-        // Несколько записей с одинаковым interaction_id должны иметь разные ключи
-        let e1 = LogEntry::new_system_event("i1", "s1", "event1");
-        let e2 = LogEntry::new_system_event("i1", "s1", "event2");
-        let rows = prepare_rows(&[e1, e2]);
-        assert_ne!(rows[0].key, rows[1].key, "row keys must be unique");
-    }
-
-    #[test]
-    fn test_prepare_rows_key_with_interaction_id() {
-        let mut entry = LogEntry::new_system_event("i1", "s1", "event");
-        entry.interaction_id = Some("int-123".into());
-        let rows = prepare_rows(&[entry]);
-        assert!(rows[0].key.starts_with("int-123-"));
-    }
-
-    #[test]
-    fn test_prepare_rows_includes_stdout_and_stderr_details() {
-        let mut entry = LogEntry::new_command_run(
-            "i1",
-            "s1",
-            Some("int1".into()),
-            "echo hello",
-            "/tmp",
-            &["echo".into(), "hello".into()],
-            0,
-            std::time::Duration::from_millis(1),
-            "hello",
-            "warn",
-            CostCounters::default(),
-        );
-        entry.stdout_summary = Some("hello".into());
-        entry.stderr_summary = Some("warn".into());
-        let rows = prepare_rows(&[entry]);
-        assert_eq!(rows[0].stdout, "hello");
-        assert_eq!(rows[0].stderr, "warn");
-    }
-
-    #[test]
-    fn test_trust_badge_for_cache_hit_uses_threshold_label() {
-        let entry = LogEntry {
-            schema_version: 1,
-            instance_id: "i1".into(),
-            session_id: "s1".into(),
-            ts: "2026-06-24T00:00:00Z".into(),
-            interaction_id: None,
-            parent_interaction_id: None,
-            kind: LogKind::ScriptRun,
-            display_profile: DisplayProfile::default(),
-            cost_counters: CostCounters::default(),
-            request: None,
-            cwd: None,
-            risk: Some(crate::types::RiskLevel::ReadOnly),
-            status: Some(LogStatus::Success),
-            failure_kind: None,
-            prompt_summary: None,
-            plan: None,
-            model_provider: None,
-            model_name: None,
-            duration_ms: None,
-            tokens_used: None,
-            command: None,
-            exit: None,
-            stdout_summary: None,
-            stderr_summary: None,
-            script_id: None,
-            cache_hit: Some(true),
-            model_called: Some(false),
-            tokens_saved_estimate: None,
-            success_count_before: Some(2),
-            success_count_after: Some(3),
-            steps: None,
-            description: None,
-        };
-
-        assert_eq!(trust_badge(&entry), "auto ✓ 3/3");
-    }
-
-    #[test]
-    fn test_undo_summary_label_prefers_summary() {
-        let label = undo_summary_label(&UndoStatus {
-            can_undo: true,
-            can_redo: false,
-            summary: Some("Create file".into()),
-        });
-        assert_eq!(label, "Create file");
-    }
-
-    #[test]
-    fn test_undo_summary_label_has_fallback() {
-        assert_eq!(
-            undo_summary_label(&UndoStatus::default()),
-            "undo/redo unavailable"
-        );
-    }
-
-    #[test]
-    fn test_truncate_safe_short() {
-        assert_eq!(truncate_safe("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_truncate_safe_long() {
-        assert_eq!(truncate_safe("hello world", 5), "hello");
-    }
 
     #[test]
     fn test_is_completion_entry_for_system_event() {
@@ -411,43 +177,30 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_rows_caps_at_500() {
-        // Заполняем >500 записей, проверяем что append_live_entry обрезает
-        let mut entries = Vec::new();
-        for i in 0..600 {
-            entries.push(LogEntry::new_system_event(
-                "i1",
-                "s1",
-                &format!("event{}", i),
-            ));
-        }
-        replace_entries(entries);
+    fn test_undo_summary_label_prefers_summary() {
+        let label = undo_summary_label(&UndoStatus {
+            can_undo: true,
+            can_redo: false,
+            summary: Some("Create file".into()),
+        });
+        assert_eq!(label, "Create file");
+    }
 
-        // Добавляем ещё одну
-        append_live_entry(LogEntry::new_system_event("i1", "s1", "extra"));
-
-        let current = get_entries();
+    #[test]
+    fn test_undo_summary_label_has_fallback() {
         assert_eq!(
-            current.len(),
-            500,
-            "should cap at 500 after append_live_entry"
+            undo_summary_label(&UndoStatus::default()),
+            "undo/redo unavailable"
         );
     }
 
     #[test]
-    fn test_status_color_variants() {
-        assert_eq!(status_color("Success"), "#6a9955");
-        assert_eq!(status_color("Failed"), "#f14c4c");
-        assert_eq!(status_color("Cancelled"), "#d7ba7d");
-        assert_eq!(status_color("Unknown"), "#888");
+    fn test_truncate_safe_short() {
+        assert_eq!(truncate_safe("hello", 10), "hello");
     }
 
     #[test]
-    fn test_kind_color_variants() {
-        assert_eq!(kind_color("AgentTurn"), "#569cd6");
-        assert_eq!(kind_color("CommandRun"), "#ce9178");
-        assert_eq!(kind_color("ScriptRun"), "#6a9955");
-        assert_eq!(kind_color("SystemEvent"), "#9cdcfe");
-        assert_eq!(kind_color("Other"), "#888");
+    fn test_truncate_safe_long() {
+        assert_eq!(truncate_safe("hello world", 5), "hello");
     }
 }

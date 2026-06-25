@@ -46,19 +46,19 @@ terio под капотом использует LLM, кеш скриптов и
 
 ## Фаза 0. Ядро: терминал + окна
 
-- [ ] Переписать UI: чёрный экран, ввод внизу, вывод — окнами
-- [ ] Модель Window: id, content (Text | Rich), focusable
-- [ ] Два фокуса: FocusIn (всегда виден) + FocusOut (переключение)
-- [ ] Scrollback: VecDeque<Window>, viewport с прокруткой
-- [ ] Убрать режимы (Table/Timeline/Cards/Readable/Chat/Auto)
-- [ ] Подтверждение риска — окно типа Confirm (y/N в потоке)
-- [ ] Режимы внимания: quiet / normal / debug
-- [ ] `terio help` — встроенная справка
-- [ ] `terio focus ↑/↓` — переключение окна вывода
-- [ ] `terio scroll N` — скролл
-- [ ] `terio repeat` — повторить последний запрос
-- [ ] Log → Window: восстановление окон из лога при запуске
-- [ ] CI: cargo fmt + clippy + test
+- [x] Переписать UI: чёрный экран, ввод внизу, вывод — окнами
+- [x] Модель Window: id, content (Text | Rich), focusable
+- [x] Два фокуса: FocusIn (всегда виден) + FocusOut (переключение)
+- [x] Scrollback: VecDeque<Window>, viewport с прокруткой
+- [x] Убрать режимы (Table/Timeline/Cards/Readable/Chat/Auto)
+- [x] Подтверждение риска — окно типа Confirm (y/N в потоке)
+- [x] Режимы внимания: quiet / normal / debug
+- [x] `terio help` — встроенная справка
+- [x] `terio focus ↑/↓` — переключение окна вывода
+- [x] `terio scroll N` — скролл
+- [x] `terio repeat` — повторить последний запрос
+- [x] Log → Window: восстановление окон из лога при запуске
+- [x] CI: cargo fmt + clippy + test
 
 ## Фаза 1. Песочница (CoW)
 

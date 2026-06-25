@@ -50,7 +50,7 @@ pub enum Command {
     /// Выполнить ранее подтверждённый сохранённый план без повторного запроса к provider
     Confirm,
 
-    /// Откатить последнее snapshot-backed выполнение script execution
+    /// Откатить последнее snapshot-backed выполнение
     Undo,
 
     /// Повторно применить последний undo snapshot
@@ -79,7 +79,6 @@ pub enum Command {
     Share {
         /// Путь для сохранения JSON (по умолчанию stdout)
         output: Option<String>,
-
         /// Количество последних записей для экспорта
         #[arg(long, default_value = "50")]
         count: usize,
@@ -90,6 +89,31 @@ pub enum Command {
         /// Путь к JSON-файлу или "-" для stdin
         input: String,
     },
+
+    // --- Phase 0: Terminal commands ---
+    /// Показать встроенную справку (Phase 0)
+    Help,
+
+    /// Переключить режим внимания: quiet | normal | debug (Phase 0)
+    Mode {
+        /// Режим: quiet (не отвлекать), normal (умеренно), debug (все шаги)
+        mode: String,
+    },
+
+    /// Переключить окно вывода в UI: up | down (Phase 0)
+    Focus {
+        /// Направление: up, down
+        direction: String,
+    },
+
+    /// Прокрутить окна в UI (Phase 0)
+    Scroll {
+        /// Количество строк (положительное = вниз, отрицательное = вверх)
+        lines: i32,
+    },
+
+    /// Повторить последний запрос (Phase 0)
+    Repeat,
 }
 
 #[derive(Subcommand)]

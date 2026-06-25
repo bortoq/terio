@@ -1,71 +1,54 @@
-// Renderer selection: maps LogEntry → EntryRenderer based on view and display_profile.
-// Extracted from app.rs per audit recommendation (P0.4).
+// Renderer: maps LogEntry → terminal text for display as windows.
+// Phase 0: removed EntryRenderer/WorkspaceView modes, replaced with Window::from_entry.
 
-use crate::types::{DisplayType, LogEntry, LogKind, RendererHint};
+use crate::types::LogEntry;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EntryRenderer {
-    Table,
-    Timeline,
-    Card,
-    Readable,
-    Chat,
-}
+/// Форматировать запись лога как строку для терминального вывода.
+/// Используется для рендеринга окна.
+pub fn render_entry_as_text(entry: &LogEntry, _idx: usize) -> String {
+    let mut lines = Vec::new();
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum WorkspaceView {
-    Auto,
-    Table,
-    Timeline,
-    Cards,
-    Readable,
-    Chat,
-}
-
-pub fn renderer_for_entry(entry: &LogEntry, view: WorkspaceView) -> EntryRenderer {
-    match view {
-        WorkspaceView::Table => return EntryRenderer::Table,
-        WorkspaceView::Timeline => return EntryRenderer::Timeline,
-        WorkspaceView::Cards => return EntryRenderer::Card,
-        WorkspaceView::Readable => return EntryRenderer::Readable,
-        WorkspaceView::Chat => return EntryRenderer::Chat,
-        WorkspaceView::Auto => {}
+    if let Some(ref cmd) = entry.command {
+        lines.push(format!("$ {}", cmd.display));
+    } else if let Some(ref desc) = entry.description {
+        lines.push(desc.clone());
+    } else if let Some(ref summary) = entry.prompt_summary {
+        lines.push(summary.clone());
     }
 
-    match entry.display_profile.renderer_hint {
-        RendererHint::Timeline => EntryRenderer::Timeline,
-        RendererHint::Card => EntryRenderer::Card,
-        RendererHint::Plain => EntryRenderer::Readable,
-        RendererHint::Table => EntryRenderer::Table,
-        RendererHint::Auto => match entry.display_profile.display_type {
-            DisplayType::Table => EntryRenderer::Table,
-            DisplayType::Summary => EntryRenderer::Card,
-            DisplayType::Text => {
-                if matches!(entry.kind, LogKind::AgentTurn | LogKind::SystemEvent) {
-                    EntryRenderer::Chat
-                } else {
-                    EntryRenderer::Readable
-                }
-            }
-            _ => match entry.kind {
-                LogKind::AgentTurn | LogKind::SystemEvent => EntryRenderer::Chat,
-                LogKind::ScriptRun => EntryRenderer::Timeline,
-                LogKind::CommandRun => EntryRenderer::Card,
-            },
-        },
+    if let Some(ref out) = entry.stdout_summary {
+        if !out.is_empty() {
+            lines.push(out.clone());
+        }
+    }
+
+    if let Some(ref err) = entry.stderr_summary {
+        if !err.is_empty() {
+            lines.push(format!("[stderr]\n{}", err));
+        }
+    }
+
+    if let Some(exit) = entry.exit {
+        if exit != 0 {
+            let status = entry
+                .status
+                .as_ref()
+                .map(|s| format!("{:?}", s))
+                .unwrap_or_default();
+            lines.push(format!("[exit {} {}]", exit, status));
+        }
+    }
+
+    let content = lines.join("\n");
+    if content.is_empty() {
+        "(no output)".to_string()
+    } else {
+        content
     }
 }
 
-pub fn workspace_title(view: WorkspaceView) -> &'static str {
-    match view {
-        WorkspaceView::Auto => "Auto Workspace",
-        WorkspaceView::Table => "Table View",
-        WorkspaceView::Timeline => "Timeline View",
-        WorkspaceView::Cards => "Card View",
-        WorkspaceView::Readable => "Readable View",
-        WorkspaceView::Chat => "Chat View",
-    }
-}
+/// Разделитель между окнами.
+pub const WINDOW_SEPARATOR: &str = "───";
 
 #[cfg(test)]
 mod tests {
@@ -73,79 +56,39 @@ mod tests {
     use crate::types::*;
 
     #[test]
-    fn test_renderer_for_entry_prefers_timeline_hint() {
-        let mut entry = LogEntry::new_system_event("i1", "s1", "event");
-        entry.display_profile.renderer_hint = RendererHint::Timeline;
-        assert_eq!(
-            renderer_for_entry(&entry, WorkspaceView::Auto),
-            EntryRenderer::Timeline
+    fn test_render_entry_command_run() {
+        let mut entry = LogEntry::new_command_run(
+            "i1",
+            "s1",
+            Some("int1".into()),
+            "echo hello",
+            "/tmp",
+            &["echo".into(), "hello".into()],
+            0,
+            std::time::Duration::from_millis(1),
+            "hello",
+            "",
+            CostCounters::default(),
         );
+        entry.stdout_summary = Some("hello".into());
+        let text = render_entry_as_text(&entry, 0);
+        assert!(text.contains("$ echo hello"));
+        assert!(text.contains("hello"));
     }
 
     #[test]
-    fn test_renderer_for_entry_maps_agent_turn_to_chat() {
-        let entry = LogEntry {
-            schema_version: 1,
-            instance_id: "i1".into(),
-            session_id: "s1".into(),
-            ts: "2026-06-24T00:00:00Z".into(),
-            interaction_id: None,
-            parent_interaction_id: None,
-            kind: LogKind::AgentTurn,
-            display_profile: DisplayProfile::default(),
-            cost_counters: CostCounters::default(),
-            request: None,
-            cwd: None,
-            risk: None,
-            status: Some(LogStatus::Success),
-            failure_kind: None,
-            prompt_summary: None,
-            plan: None,
-            model_provider: None,
-            model_name: None,
-            duration_ms: None,
-            tokens_used: None,
-            command: None,
-            exit: None,
-            stdout_summary: None,
-            stderr_summary: None,
-            script_id: None,
-            cache_hit: None,
-            model_called: Some(true),
-            tokens_saved_estimate: None,
-            success_count_before: None,
-            success_count_after: None,
-            steps: None,
-            description: Some("agent".into()),
-        };
-        assert_eq!(
-            renderer_for_entry(&entry, WorkspaceView::Auto),
-            EntryRenderer::Chat
-        );
+    fn test_render_entry_system_event() {
+        let entry = LogEntry::new_system_event("i1", "s1", "system message");
+        let text = render_entry_as_text(&entry, 0);
+        assert!(text.contains("system message"));
     }
 
     #[test]
-    fn test_renderer_for_entry_table_view_always_table() {
-        let entry = LogEntry::new_system_event("i1", "s1", "event");
-        assert_eq!(
-            renderer_for_entry(&entry, WorkspaceView::Table),
-            EntryRenderer::Table
-        );
-    }
-
-    #[test]
-    fn test_renderer_for_entry_chat_view_always_chat() {
-        let entry = LogEntry::new_system_event("i1", "s1", "event");
-        assert_eq!(
-            renderer_for_entry(&entry, WorkspaceView::Chat),
-            EntryRenderer::Chat
-        );
-    }
-
-    #[test]
-    fn test_workspace_title_has_all_variants() {
-        assert_eq!(workspace_title(WorkspaceView::Auto), "Auto Workspace");
-        assert_eq!(workspace_title(WorkspaceView::Table), "Table View");
-        assert_eq!(workspace_title(WorkspaceView::Chat), "Chat View");
+    fn test_render_entry_empty_fallback() {
+        let mut entry = LogEntry::new_system_event("i1", "s1", "");
+        // new_system_event sets description to ""
+        entry.description = None;
+        let text = render_entry_as_text(&entry, 0);
+        assert_eq!(text, "(no output)");
     }
 }

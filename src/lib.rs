@@ -1,4 +1,4 @@
-// terio — интерфейс-агрегатор с AI-планированием и кешированием скриптов
+// terio — интегратор интерфейсов: терминал с LLM, кешем скриптов и песочницей
 
 pub mod cli;
 pub mod types;
@@ -14,6 +14,7 @@ pub mod provider;
 pub mod redact;
 pub mod run;
 pub mod undo;
+pub mod window;
 
 #[cfg(feature = "desktop")]
 pub mod ui;

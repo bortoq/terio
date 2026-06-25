@@ -75,6 +75,19 @@ impl Default for UndoConfig {
     }
 }
 
+/// Режим внимания: определяет, как часто terio отвлекает пользователя.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionMode {
+    /// Не отвлекать: все untrusted-операции выполняются автоматически
+    #[default]
+    Quiet,
+    /// Спрашивать на untrusted (1 раз за сессию на скрипт)
+    Normal,
+    /// Каждый шаг — подтверждение
+    Debug,
+}
+
 /// Top-level config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -92,6 +105,9 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default)]
     pub undo: UndoConfig,
+    /// Режим внимания: quiet | normal | debug
+    #[serde(default)]
+    pub attention_mode: AttentionMode,
 }
 
 impl Config {
@@ -183,6 +199,16 @@ impl Config {
                     "warn" => UndoMode::Warn,
                     "bubblewrap" | "sandbox" => UndoMode::Bubblewrap,
                     other => anyhow::bail!("unknown undo.mode: {other}. Use: warn, bubblewrap"),
+                };
+            }
+            "attention_mode" => {
+                self.attention_mode = match value {
+                    "quiet" => AttentionMode::Quiet,
+                    "normal" => AttentionMode::Normal,
+                    "debug" => AttentionMode::Debug,
+                    other => {
+                        anyhow::bail!("unknown attention mode: {other}. Use: quiet, normal, debug")
+                    }
                 };
             }
             _ => anyhow::bail!("unknown config key: {key}"),
