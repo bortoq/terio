@@ -204,9 +204,35 @@ struct Window {
 
 ### Script engine (target)
 
-- Всё управление через скрипты: help, config, focus, confirm, security
-- Интерпретатор — ядро terio (Rust)
-- Три уровня: `core/` (встроенные), `user/` (пользовательские), `learned/` (из LLM)
+**Язык: [Rhai](https://rhai.rs/) + TOML overlay.**
+
+- **Rhai** — Rust-native скриптовый язык для сложных скриптов (условия, циклы, terio API)
+- **TOML** — декларативный формат для простых скриптов: `triggers + steps + show`
+- TOML-файл автоматически компилируется в Rhai-скрипт интерпретатором
+- Пользователь начинает с TOML (ноль кода), переходит на Rhai при необходимости
+
+**Почему Rhai:**
+- `rustc` + `cargo add rhai` — никаких C-зависимостей (ср. Lua через `mlua`)
+- Синтаксис как Rust — знаком сообществу
+- Sandbox из коробки: `Engine::new()` без FS/network
+- Прямые Rust-коллы — регистрация функций в движке
+- Нет GC — предсказуемая производительность
+
+**API, доступное скриптам:**
+```rust
+terio::execute("ls", ["-la"]);          // запустить команду
+terio::show(result.stdout);              // показать окно
+terio::confirm("Удалить файлы?");       // окно-подтверждение
+terio::config_get("attention_mode");    // читать конфиг
+terio::config_set("undo.mode", "warn"); // писать конфиг
+```
+
+**Три уровня скриптов:**
+- `terio-scripts/core/` — встроенные (Rhai), можно переопределить
+- `terio-scripts/user/` — пользовательские (Rhai или TOML)
+- `terio-scripts/learned/` — из LLM (TOML, авто-генерация)
+
+Всё управление через скрипты: help, config, focus, confirm, security.
 
 ### Cost optimizer (target)
 
@@ -252,9 +278,10 @@ C_risk = P(failure) * C_rollback
 - [ ] Изоляция чтения: bwrap с bind mounts
 - [ ] Продвижение: read-only → 1 успех; local_write → N успехов
 
-## Step 5: Script engine
+## Step 5: Script engine (Rhai + TOML)
 
-- [ ] Интерпретатор скриптов в ядре
+- [ ] `rhai::Engine` + TOML → RhaiAST транслятор
+- [ ] terio API для скриптов: execute, confirm, show, config_get/set
 - [ ] Перенос help/config/focus/confirm в скрипты
 - [ ] synonym dictionary на базе существующего matcher.rs
 

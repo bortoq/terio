@@ -63,13 +63,25 @@
 
 ### Этап 4: Script engine
 
-**Что делаем:**
-1. Интерпретатор скриптов (ядро terio, Rust)
-2. Структура директорий: `terio-scripts/core/`, `user/`, `learned/`
-3. Перенос help/config/focus/confirm в скрипты
-4. synonym dictionary на базе `matcher.rs`
+**Язык: [Rhai](https://rhai.rs/) + TOML overlay.**
 
-**Кодовая сложность:** ~500 строк (ядро) + ~200 (миграция команд)
+- **Rhai** — Rust-native скриптовый язык (синтаксис близок к Rust, без GC, sandbox из коробки)
+- **TOML** — декларативный формат для 80% скриптов: `triggers + steps + show`
+- TOML → RhaiAST транслятор в ядре terio
+
+**Что делаем:**
+1. `rhai::Engine` + TOML-парсер в ядре terio
+2. API: `terio::execute()`, `terio::confirm()`, `terio::show()`, `terio::config_get/set()`
+3. Структура директорий: `terio-scripts/core/`, `user/`, `learned/`
+4. Перенос help/config/focus/confirm в скрипты
+5. synonym dictionary на базе `matcher.rs`
+
+**Почему не свой DSL:**
+- Свой DSL = парсер + AST + интерпретатор + документация + IDE = месяцы работы
+- Rhai — готовый язык, одна зависимость (`cargo add rhai`)
+- Пользователи не знают DSL; Rhai знаком Rust-сообществу
+
+**Кодовая сложность:** ~400 строк (ядро) + ~200 (миграция команд)
 
 ### Этап 5: Проактивность + cost optimizer
 

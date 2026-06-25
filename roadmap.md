@@ -71,9 +71,28 @@ terio под капотом использует LLM, кеш скриптов и
 
 ## Фаза 2. Скриптовая система
 
-- [ ] Интерпретатор скриптов (ядро terio, Rust)
-- [ ] Структура: `terio-scripts/core/` (встроенные) + `user/` + `learned/`
-- [ ] Формат скрипта: triggers, steps, show
+**Выбранный язык:** [Rhai](https://rhai.rs/) — Rust-native скриптовый язык.
+
+**Почему Rhai, а не свой DSL / Lua / WASM:**
+- Rust-native (`cargo add rhai`), без C-зависимостей (в отличие от Lua через `mlua`).
+- Синтаксис близок к Rust — минимальный порог для аудитории terio.
+- Безопасный sandbox из коробки: `Engine::new()` без файловой системы, лимиты на итерации/операторы.
+- Нет GC — предсказуемая производительность.
+- Прямые Rust-коллы: регистрируются функции напрямую, никакой сериализации.
+
+**Declarative overlay (TOML):** 80% скриптов не требуют программирования.
+```toml
+triggers = ["list files", "ls"]
+[step]
+command = "ls"
+args = ["-la"]
+```
+TOML-файл компилируется в Rhai-скрипт. Пользователь может начать с TOML
+и перейти на Rhai, когда понадобится логика (условия, циклы, вызов terio API).
+
+- [ ] Интерпретатор: `rhai::Engine` + TOML → RhaiAST транслятор
+- [ ] Структура директорий: `terio-scripts/core/` (Rhai), `user/` (Rhai + TOML), `learned/` (TOML)
+- [ ] API для скриптов: `terio::execute()`, `terio::confirm()`, `terio::show()`, `terio::config_get/set()`
 - [ ] Перенос help/config/focus/confirm в скрипты
 - [ ] `terio script install`, `terio script list`
 - [ ] Переопределение встроенных скриптов пользователем
