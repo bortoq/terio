@@ -125,9 +125,7 @@ impl IntegrationManager {
         self.save_all()?;
 
         // Check if program exists
-        let which_result = std::process::Command::new("which")
-            .arg(program)
-            .output();
+        let which_result = std::process::Command::new("which").arg(program).output();
 
         let _program_path = match which_result {
             Ok(output) if output.status.success() => {
@@ -150,16 +148,17 @@ impl IntegrationManager {
         };
 
         // Read --help output
-        let help_output = std::process::Command::new(program)
-            .arg("--help")
-            .output();
+        let help_output = std::process::Command::new(program).arg("--help").output();
 
         let help_text = match help_output {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let combined = if stdout.len() > stderr.len() { stdout } else { stderr };
-                combined
+                if stdout.len() > stderr.len() {
+                    stdout
+                } else {
+                    stderr
+                }
             }
             Err(e) => {
                 let record = IntegrationRecord {
@@ -182,10 +181,7 @@ impl IntegrationManager {
 
         // Try to generate integration script
         let script_result = generate_integration_script(program, &help_text);
-        let script_id = match script_result {
-            Ok(script_id) => Some(script_id),
-            Err(_) => None,
-        };
+        let script_id = script_result.ok();
 
         let record = IntegrationRecord {
             schema_version: 1,
@@ -247,7 +243,7 @@ pub fn print_integration_status(mgr: &IntegrationManager) {
         println!("(no programs learned yet. Use `terio learn <program>` to start.)");
         return;
     }
-    println!("{:<20} {:<12} {}", "Program", "Status", "Learned At");
+    println!("{:<20} {:<12} Learned At", "Program", "Status");
     println!("{:-<20} {:-<12} {:-<20}", "", "", "");
     for r in &records {
         let status_str = match &r.status {
@@ -324,8 +320,8 @@ pub fn export_share_data(
 
 /// Import shared window data: save entries and cache entries.
 pub fn import_share_data(json_data: &str, log_store: &crate::log::LogStore) -> Result<usize> {
-    let window: SharedWindow = serde_json::from_str(json_data)
-        .context("invalid shared window data")?;
+    let window: SharedWindow =
+        serde_json::from_str(json_data).context("invalid shared window data")?;
 
     let mut count = 0;
     for entry in &window.entries {

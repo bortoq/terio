@@ -70,10 +70,7 @@ pub fn append_live_entry(entry: LogEntry) {
 }
 
 pub fn take_live_stream() -> Option<broadcast::Receiver<LogEntry>> {
-    LIVE_STREAM
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.take())
+    LIVE_STREAM.lock().ok().and_then(|mut guard| guard.take())
 }
 
 pub fn send_ui_command(command: UiCommand) {
@@ -281,9 +278,16 @@ mod tests {
     #[test]
     fn test_prepare_rows_includes_stdout_and_stderr_details() {
         let mut entry = LogEntry::new_command_run(
-            "i1", "s1", Some("int1".into()), "echo hello", "/tmp",
-            &["echo".into(), "hello".into()], 0,
-            std::time::Duration::from_millis(1), "hello", "warn",
+            "i1",
+            "s1",
+            Some("int1".into()),
+            "echo hello",
+            "/tmp",
+            &["echo".into(), "hello".into()],
+            0,
+            std::time::Duration::from_millis(1),
+            "hello",
+            "warn",
             CostCounters::default(),
         );
         entry.stdout_summary = Some("hello".into());
@@ -411,7 +415,11 @@ mod tests {
         // Заполняем >500 записей, проверяем что append_live_entry обрезает
         let mut entries = Vec::new();
         for i in 0..600 {
-            entries.push(LogEntry::new_system_event("i1", "s1", &format!("event{}", i)));
+            entries.push(LogEntry::new_system_event(
+                "i1",
+                "s1",
+                &format!("event{}", i),
+            ));
         }
         replace_entries(entries);
 
@@ -419,7 +427,11 @@ mod tests {
         append_live_entry(LogEntry::new_system_event("i1", "s1", "extra"));
 
         let current = get_entries();
-        assert_eq!(current.len(), 500, "should cap at 500 after append_live_entry");
+        assert_eq!(
+            current.len(),
+            500,
+            "should cap at 500 after append_live_entry"
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub fn run() {
 
 fn app() -> Element {
     let mut refresh_tick = use_signal(|| 0_u64);
-    let live_rx = use_signal(|| take_live_stream());
+    let live_rx = use_signal(take_live_stream);
 
     let entries = get_entries();
     let rows = prepare_rows(&entries);
@@ -516,10 +516,7 @@ fn auto_renderer(
 }
 
 #[component]
-fn details_renderer(
-    rows: Vec<super::state::RowData>,
-    row_key: String,
-) -> Element {
+fn details_renderer(rows: Vec<super::state::RowData>, row_key: String) -> Element {
     let row = rows.iter().find(|r| r.key == row_key);
     rsx! {
         if let Some(row) = row {
