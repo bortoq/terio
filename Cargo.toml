@@ -3,7 +3,7 @@ name = "terio"
 version = "0.1.0"
 edition = "2021"
 description = "Интерфейс-агрегатор с AI-планированием и кешированием скриптов"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/bortoq/terio"
 
 [dependencies]
