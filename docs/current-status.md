@@ -1,6 +1,6 @@
 # Current implementation status
 
-После коммита `8acb1fa` (docs pivot) и `00fbbd8` (Phase 7 + audit fixes).
+После коммита `9e0bbf3` (Phase 0: terminal-like UI + window model).
 
 ---
 
@@ -22,6 +22,12 @@
 | `terio forget <program>` | `src/integration.rs` | Забыть программу |
 | `terio share` | `src/integration.rs` | Экспорт окна |
 | `terio receive` | `src/integration.rs` | Импорт окна |
+| `terio help` | `src/main.rs` | Встроенная справка |
+| `terio mode <quiet|normal|debug>` | `src/main.rs` | Режим внимания |
+| `terio focus <up|down>` | `src/main.rs` | Переключение окна (UI) |
+| `terio scroll <N>` | `src/main.rs` | Скролл (UI) |
+| `terio repeat` | `src/main.rs` | Повтор последнего запроса |
+| `terio sandbox status` | `src/main.rs` | Состояние песочницы |
 
 ### CLI (экспериментально)
 
@@ -33,12 +39,13 @@
 ### UI (Dioxus desktop webview)
 
 - Опционально, feature `desktop`
-- Multi-view workspace: Auto, Table, Timeline, Cards, Readable, Chat
-- Поле ввода + кнопка Ask
-- Pending confirmation с exact execution
-- Trust level индикатор
-- Undo/Redo кнопки
-- Live-stream обновление (in-process)
+- Terminal-like: чёрный экран, ввод внизу (`$`), вывод — окнами
+- Window model: Window { id, kind: Text | Confirm }, WindowManager (VecDeque + FocusIn/FocusOut)
+- Input routing: `help`, `mode`, `focus`, `scroll`, `repeat`, `y/n` → UiCommand
+- Persistent FocusOut (Dioxus signal, не сбрасывается при ререндере)
+- PendingConfirmation → `WindowKind::Confirm` (окно-подтверждение в потоке)
+- Activity indicator + undo/redo status bar
+- Ctrl+L для refresh/очистки
 
 ### Лог
 
@@ -68,17 +75,21 @@
 - Learn через --help программы
 - ShareWindow: экспорт/импорт (LogEntry + cache entries)
 
-### Песочница (experimental)
+### Песочница (Phase 1: CoW)
 
-- `bubblewrap` wrapper (если доступен)
-- Best-effort snapshot для скриптов
-- Off by default
+- `bubblewrap` wrapper с двумя режимами:
+  - legacy: `--ro-bind / /` + `--share-net` (по умолчанию)
+  - strict: пустой rootfs + bind mounts `/bin`, `/usr`, `/lib*` + без сети
+- Snapshot до выполнения, rollback при ошибке/отмене
+- `no_read_paths` в конфиге (path → `--tmpfs` override)
+- Auto-trust: read-only=1 успех, local_write=3 успеха
+- `terio sandbox status` — просмотр состояния
 
 ---
 
 ## Тесты
 
-- 135 unit-тестов (lib)
+- 143+ unit-тестов (lib)
 - CI: `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo build` + `cargo test`
 
 ---

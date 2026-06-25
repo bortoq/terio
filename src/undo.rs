@@ -390,12 +390,25 @@ fn resolve_candidate_path(arg: &str, cwd: &Path) -> Option<PathBuf> {
     absolute.strip_prefix(cwd).ok().map(PathBuf::from)
 }
 
-fn wrap_command_for_mode(
+pub fn wrap_command_for_mode(
     mode: &UndoMode,
     argv: &[String],
     cwd: &Path,
     home: &Path,
     bwrap_binary: Option<PathBuf>,
+) -> WrappedCommand {
+    // Load config for sandbox settings
+    let config = crate::config::Config::load().unwrap_or_default();
+    wrap_command_for_mode_impl(mode, argv, cwd, home, bwrap_binary, &config.sandbox)
+}
+
+fn wrap_command_for_mode_impl(
+    mode: &UndoMode,
+    argv: &[String],
+    cwd: &Path,
+    home: &Path,
+    bwrap_binary: Option<PathBuf>,
+    sandbox_config: &crate::config::SandboxConfig,
 ) -> WrappedCommand {
     match mode {
         UndoMode::Warn => WrappedCommand {
@@ -417,26 +430,76 @@ fn wrap_command_for_mode(
                 bwrap.to_string_lossy().to_string(),
                 "--die-with-parent".to_string(),
                 "--new-session".to_string(),
-                "--share-net".to_string(),
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                "--dev".to_string(),
-                "/dev".to_string(),
-                "--proc".to_string(),
-                "/proc".to_string(),
-                "--tmpfs".to_string(),
-                "/tmp".to_string(),
-                "--bind".to_string(),
-                cwd.to_string_lossy().to_string(),
-                cwd.to_string_lossy().to_string(),
-                "--bind".to_string(),
-                home.to_string_lossy().to_string(),
-                home.to_string_lossy().to_string(),
-                "--chdir".to_string(),
-                cwd.to_string_lossy().to_string(),
-                "--".to_string(),
             ];
+
+            if sandbox_config.read_isolation {
+                // Строгая изоляция: пустой rootfs + точечные bind mounts
+                // Без --share-net — сеть отключена
+                wrapped.extend_from_slice(&[
+                    "--ro-bind".to_string(),
+                    "/bin".to_string(),
+                    "/bin".to_string(),
+                    "--ro-bind".to_string(),
+                    "/usr".to_string(),
+                    "/usr".to_string(),
+                    "--ro-bind".to_string(),
+                    "/lib".to_string(),
+                    "/lib".to_string(),
+                    "--ro-bind".to_string(),
+                    "/lib64".to_string(),
+                    "/lib64".to_string(),
+                    "--ro-bind".to_string(),
+                    "/libx32".to_string(),
+                    "/libx32".to_string(),
+                    "--ro-bind".to_string(),
+                    "/etc/alternatives".to_string(),
+                    "/etc/alternatives".to_string(),
+                    "--dev".to_string(),
+                    "/dev".to_string(),
+                    "--proc".to_string(),
+                    "/proc".to_string(),
+                    "--tmpfs".to_string(),
+                    "/tmp".to_string(),
+                    "--bind".to_string(),
+                    cwd.to_string_lossy().to_string(),
+                    cwd.to_string_lossy().to_string(),
+                    "--ro-bind".to_string(),
+                    home.to_string_lossy().to_string(),
+                    home.to_string_lossy().to_string(),
+                ]);
+                // Override no_read_paths with empty tmpfs
+                for np in &sandbox_config.no_read_paths {
+                    let resolved = resolve_no_read_path(np, home, cwd);
+                    if let Some(path) = resolved {
+                        wrapped.push("--tmpfs".to_string());
+                        wrapped.push(path.to_string_lossy().to_string());
+                    }
+                }
+            } else {
+                // Legacy mode: full rootfs read-only + network
+                wrapped.push("--share-net".to_string());
+                wrapped.extend_from_slice(&[
+                    "--ro-bind".to_string(),
+                    "/".to_string(),
+                    "/".to_string(),
+                    "--dev".to_string(),
+                    "/dev".to_string(),
+                    "--proc".to_string(),
+                    "/proc".to_string(),
+                    "--tmpfs".to_string(),
+                    "/tmp".to_string(),
+                    "--bind".to_string(),
+                    cwd.to_string_lossy().to_string(),
+                    cwd.to_string_lossy().to_string(),
+                    "--bind".to_string(),
+                    home.to_string_lossy().to_string(),
+                    home.to_string_lossy().to_string(),
+                ]);
+            }
+
+            wrapped.push("--chdir".to_string());
+            wrapped.push(cwd.to_string_lossy().to_string());
+            wrapped.push("--".to_string());
             wrapped.extend(argv.iter().cloned());
             WrappedCommand {
                 argv: wrapped,
@@ -447,7 +510,23 @@ fn wrap_command_for_mode(
     }
 }
 
-fn find_bwrap_binary() -> Option<PathBuf> {
+/// Resolve a no_read_paths entry (supports ~/ and relative paths) to an absolute path.
+fn resolve_no_read_path(path: &str, home: &Path, _cwd: &Path) -> Option<PathBuf> {
+    let stripped = path.strip_prefix("~/").or_else(|| path.strip_prefix("~"))?;
+    let p = if stripped.is_empty() {
+        home.to_path_buf()
+    } else {
+        home.join(stripped)
+    };
+    // Only resolve if it actually exists
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+pub fn find_bwrap_binary() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join("bwrap");
@@ -552,30 +631,97 @@ mod tests {
 
     #[test]
     fn test_bubblewrap_wrapper_uses_bwrap_when_available() {
-        let wrapped = wrap_command_for_mode(
+        let sandbox_config = crate::config::SandboxConfig::default();
+        let wrapped = wrap_command_for_mode_impl(
             &UndoMode::Bubblewrap,
             &["echo".into(), "hi".into()],
             Path::new("/tmp/project"),
             Path::new("/tmp/home"),
             Some(PathBuf::from("/usr/bin/bwrap")),
+            &sandbox_config,
         );
         assert!(wrapped.sandboxed);
         assert_eq!(wrapped.argv[0], "/usr/bin/bwrap");
+        // Legacy mode uses --ro-bind / /
         assert!(wrapped.argv.iter().any(|arg| arg == "--ro-bind"));
         assert_eq!(wrapped.argv.last().map(String::as_str), Some("hi"));
     }
 
     #[test]
     fn test_bubblewrap_wrapper_falls_back_to_warn_when_missing() {
-        let wrapped = wrap_command_for_mode(
+        let sandbox_config = crate::config::SandboxConfig::default();
+        let wrapped = wrap_command_for_mode_impl(
             &UndoMode::Bubblewrap,
             &["echo".into(), "hi".into()],
             Path::new("/tmp/project"),
             Path::new("/tmp/home"),
             None,
+            &sandbox_config,
         );
         assert!(!wrapped.sandboxed);
         assert!(wrapped.warning.unwrap().contains("bubblewrap"));
         assert_eq!(wrapped.argv, vec!["echo".to_string(), "hi".to_string()]);
+    }
+
+    #[test]
+    fn test_read_isolation_no_share_net() {
+        let sandbox_config = crate::config::SandboxConfig {
+            read_isolation: true,
+            no_read_paths: vec![],
+        };
+        let wrapped = wrap_command_for_mode_impl(
+            &UndoMode::Bubblewrap,
+            &["echo".into(), "hi".into()],
+            Path::new("/tmp/project"),
+            Path::new("/tmp/home"),
+            Some(PathBuf::from("/usr/bin/bwrap")),
+            &sandbox_config,
+        );
+        assert!(wrapped.sandboxed);
+        // No --share-net in strict mode
+        assert!(!wrapped.argv.iter().any(|a| a == "--share-net"));
+        // Has system bind mounts
+        assert!(wrapped.argv.iter().any(|a| a == "/bin"));
+        assert!(wrapped.argv.iter().any(|a| a == "/usr"));
+    }
+
+    #[test]
+    fn test_read_isolation_with_no_read_paths() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ssh")).unwrap();
+        std::fs::write(dir.path().join(".ssh/id_rsa"), "test").unwrap();
+
+        let sandbox_config = crate::config::SandboxConfig {
+            read_isolation: true,
+            no_read_paths: vec!["~/.ssh".to_string()],
+        };
+        let wrapped = wrap_command_for_mode_impl(
+            &UndoMode::Bubblewrap,
+            &["echo".into(), "hi".into()],
+            Path::new("/tmp/project"),
+            dir.path(),
+            Some(PathBuf::from("/usr/bin/bwrap")),
+            &sandbox_config,
+        );
+        assert!(wrapped.sandboxed);
+        // Should have a --tmpfs entry for .ssh (not just the standard /tmp)
+        let tmpfs_indices: Vec<usize> = wrapped
+            .argv
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.as_str() == "--tmpfs")
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            tmpfs_indices.len() >= 2,
+            "should have at least 2 --tmpfs entries (got {})",
+            tmpfs_indices.len()
+        );
+        // At least one should cover .ssh (not just /tmp)
+        let has_ssh_tmpfs = tmpfs_indices
+            .iter()
+            .any(|&i| i + 1 < wrapped.argv.len() && wrapped.argv[i + 1].contains(".ssh"));
+        assert!(has_ssh_tmpfs, "should have --tmpfs covering .ssh");
     }
 }

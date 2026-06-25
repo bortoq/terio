@@ -24,6 +24,8 @@ pub enum UiCommand {
     Focus(String), // "up" | "down"
     Scroll(i32),   // lines (positive = down, negative = up)
     Repeat,
+    Help,
+    Mode(String), // "quiet" | "normal" | "debug"
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -115,6 +117,38 @@ pub fn is_completion_entry(entry: &LogEntry) -> bool {
     )
 }
 
+/// Парсинг ввода: internal terio commands vs LLM ask.
+pub fn parse_input(input: &str) -> UiCommand {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return UiCommand::Ask(String::new());
+    }
+    match trimmed {
+        "help" => return UiCommand::Help,
+        "repeat" => return UiCommand::Repeat,
+        "undo" => return UiCommand::Undo,
+        "redo" => return UiCommand::Redo,
+        "confirm y" | "confirm yes" | "y" | "Y" => return UiCommand::Confirm,
+        "confirm n" | "confirm no" | "n" | "N" => {
+            // no-op: decline is just not confirming
+            return UiCommand::Ask(String::new());
+        }
+        _ => {}
+    }
+    if let Some(mode) = trimmed.strip_prefix("mode ") {
+        return UiCommand::Mode(mode.trim().to_string());
+    }
+    if let Some(dir) = trimmed.strip_prefix("focus ") {
+        return UiCommand::Focus(dir.trim().to_string());
+    }
+    if let Some(lines) = trimmed.strip_prefix("scroll ") {
+        if let Ok(n) = lines.trim().parse::<i32>() {
+            return UiCommand::Scroll(n);
+        }
+    }
+    UiCommand::Ask(trimmed.to_string())
+}
+
 /// Безопасное усечение строки по символам (не байтам).
 pub fn truncate_safe(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
@@ -202,5 +236,66 @@ mod tests {
     #[test]
     fn test_truncate_safe_long() {
         assert_eq!(truncate_safe("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn test_parse_input_help() {
+        assert!(matches!(parse_input("help"), UiCommand::Help));
+    }
+
+    #[test]
+    fn test_parse_input_repeat() {
+        assert!(matches!(parse_input("repeat"), UiCommand::Repeat));
+    }
+
+    #[test]
+    fn test_parse_input_mode() {
+        match parse_input("mode quiet") {
+            UiCommand::Mode(m) => assert_eq!(m, "quiet"),
+            _ => panic!("expected Mode"),
+        }
+    }
+
+    #[test]
+    fn test_parse_input_focus() {
+        match parse_input("focus up") {
+            UiCommand::Focus(d) => assert_eq!(d, "up"),
+            _ => panic!("expected Focus"),
+        }
+    }
+
+    #[test]
+    fn test_parse_input_confirm_y() {
+        assert!(matches!(parse_input("y"), UiCommand::Confirm));
+        assert!(matches!(parse_input("Y"), UiCommand::Confirm));
+        assert!(matches!(parse_input("confirm y"), UiCommand::Confirm));
+        assert!(matches!(parse_input("confirm yes"), UiCommand::Confirm));
+    }
+
+    #[test]
+    fn test_parse_input_confirm_n() {
+        assert!(matches!(parse_input("n"), UiCommand::Ask(_)));
+        assert!(matches!(parse_input("confirm n"), UiCommand::Ask(_)));
+    }
+
+    #[test]
+    fn test_parse_input_scroll() {
+        match parse_input("scroll 5") {
+            UiCommand::Scroll(n) => assert_eq!(n, 5),
+            _ => panic!("expected Scroll"),
+        }
+    }
+
+    #[test]
+    fn test_parse_input_ask_fallback() {
+        match parse_input("list files in /tmp") {
+            UiCommand::Ask(s) => assert_eq!(s, "list files in /tmp"),
+            _ => panic!("expected Ask"),
+        }
+    }
+
+    #[test]
+    fn test_parse_input_empty_ask() {
+        assert!(matches!(parse_input(""), UiCommand::Ask(_)));
     }
 }

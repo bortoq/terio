@@ -48,26 +48,26 @@ terio под капотом использует LLM, кеш скриптов и
 
 - [x] Переписать UI: чёрный экран, ввод внизу, вывод — окнами
 - [x] Модель Window: id, content (Text | Rich), focusable
-- [x] Два фокуса: FocusIn (всегда виден) + FocusOut (переключение)
+- [~] Два фокуса: FocusIn (всегда виден) + FocusOut (переключение) [x model + UI signal, ] CLI stub]
 - [x] Scrollback: VecDeque<Window>, viewport с прокруткой
 - [x] Убрать режимы (Table/Timeline/Cards/Readable/Chat/Auto)
-- [x] Подтверждение риска — окно типа Confirm (y/N в потоке)
-- [x] Режимы внимания: quiet / normal / debug
-- [x] `terio help` — встроенная справка
-- [x] `terio focus ↑/↓` — переключение окна вывода
-- [x] `terio scroll N` — скролл
-- [x] `terio repeat` — повторить последний запрос
-- [x] Log → Window: восстановление окон из лога при запуске
-- [x] CI: cargo fmt + clippy + test
+- [~] Подтверждение риска — окно типа Confirm (y/N в потоке) [x baseline, ~ input routing works, ] полноценный поток
+- [~] Режимы внимания: quiet / normal / debug [x config + CLI, ~ enforced in ask flow]
+- [x] `terio help` — встроенная справка (CLI + UI input routing)
+- [~] `terio focus ↑/↓` — переключение окна вывода [x UI routing, ~ persistent focus]
+- [~] `terio scroll N` — скролл [x UI routing, x WindowManager.focus_move, ~ real scroll]
+- [~] `terio repeat` — повторить последний запрос [x CLI side, ~ UI input routing]
+- [x] Log → Window: восстановление окон из лога при запуске (WindowManager.from_log)
+- [x] CI: cargo fmt + clippy + test (132 теста)
 
 ## Фаза 1. Песочница (CoW)
 
-- [ ] Copy-on-Write для untrusted-команд (на базе undo.rs / bubblewrap)
-- [ ] Snapshot до выполнения, rollback при ошибке/отмене
-- [ ] Untrusted → Trusted после 1 успеха (N=1)
-- [ ] Изоляция чтения: bwrap с пустым rootfs + bind mounts
-- [ ] Белые списки no_read_paths в конфиге
-- [ ] `terio sandbox status` — просмотр состояния песочницы
+- [x] Copy-on-Write для untrusted-команд (на базе undo.rs / bubblewrap)
+- [x] Snapshot до выполнения, rollback при ошибке/отмене
+- [x] Untrusted → Trusted после 1 успеха (N=1 для read-only, N=3 для local_write)
+- [x] Изоляция чтения: bwrap с пустым rootfs + bind mounts (strict mode)
+- [x] Белые списки no_read_paths в конфиге
+- [x] `terio sandbox status` — просмотр состояния песочницы
 
 ## Фаза 2. Скриптовая система
 

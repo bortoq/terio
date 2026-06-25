@@ -114,6 +114,16 @@ pub enum Command {
 
     /// Повторить последний запрос (Phase 0)
     Repeat,
+
+    /// Управление песочницей (Phase 1)
+    #[command(subcommand)]
+    Sandbox(SandboxCmd),
+}
+
+#[derive(Subcommand)]
+pub enum SandboxCmd {
+    /// Показать состояние песочницы
+    Status,
 }
 
 #[derive(Subcommand)]

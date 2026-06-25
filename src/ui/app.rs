@@ -5,8 +5,9 @@ use crate::window::{WindowKind, WindowManager};
 use dioxus::prelude::*;
 
 use super::state::{
-    append_live_entry, get_entries, is_completion_entry, refresh_entries, refresh_undo_status,
-    send_ui_command, take_live_stream, undo_summary_label, ActivityState, UiCommand,
+    append_live_entry, get_entries, is_completion_entry, parse_input, refresh_entries,
+    refresh_undo_status, send_ui_command, take_live_stream, undo_summary_label, ActivityState,
+    UiCommand,
 };
 
 /// Запускает Dioxus-окно с переданными записями лога.
@@ -32,10 +33,13 @@ fn app() -> Element {
     let mut refresh_tick = use_signal(|| 0_u64);
     let live_rx = use_signal(take_live_stream);
 
-    // Создаём WindowManager из записей лога
     let mut input_text = use_signal(String::new);
     let mut undo_status = use_signal(refresh_undo_status);
     let mut activity_state = use_signal(|| ActivityState::Idle);
+
+    // FocusOut persistence: храним индекс фокуса между рендерами
+    let mut focus_signal = use_signal(|| None::<usize>);
+    let mut prev_entry_count = use_signal(|| 0_usize);
 
     // Подписка на live-стрим
     use_future(move || {
@@ -59,22 +63,89 @@ fn app() -> Element {
         }
     });
 
+    // Input routing: parse input, send appropriate UiCommand
     let mut on_submit = move |_| {
         let val = input_text();
         let val = val.trim().to_string();
         if !val.is_empty() {
-            activity_state.set(ActivityState::Busy);
-            send_ui_command(UiCommand::Ask(val.clone()));
+            let cmd = parse_input(&val);
+            // Help is handled locally (no async needed)
+            if matches!(cmd, UiCommand::Help) {
+                let msg = concat!(
+                    "terio commands:\n",
+                    "  help              this help\n",
+                    "  mode <quiet|normal|debug>  attention mode\n",
+                    "  focus <up|down>   focus output window\n",
+                    "  scroll <N>        scroll output\n",
+                    "  repeat            repeat last request\n",
+                    "  y / confirm y     confirm pending plan\n",
+                    "  n / confirm n     decline\n",
+                    "  undo              undo last operation\n",
+                    "  redo              redo last undo\n",
+                    "  <anything else>    send as LLM ask"
+                );
+                append_system_event_direct(msg);
+                undo_status.set(refresh_undo_status());
+                refresh_tick += 1;
+            } else if matches!(cmd, UiCommand::Mode(_)) {
+                // Mode is handled locally
+                if let UiCommand::Mode(ref m) = cmd {
+                    let mut config = crate::config::Config::load().unwrap_or_default();
+                    let result = config.set("attention_mode", m);
+                    if let Err(ref e) = result {
+                        append_system_event_direct(&format!("mode error: {e}"));
+                    } else {
+                        let _ = config.save();
+                        append_system_event_direct(&format!("attention mode: {m}"));
+                    }
+                }
+                undo_status.set(refresh_undo_status());
+                refresh_tick += 1;
+            } else {
+                activity_state.set(ActivityState::Busy);
+                send_ui_command(cmd);
+            }
         }
         input_text.set(String::new());
     };
 
-    let _ = refresh_tick(); // force re-render
+    let _ = refresh_tick(); // force re-render (Dioxus reactivity)
 
-    // Формируем окна для отображения
+    // Формируем окна из записей лога с persistent focus
     let entries = get_entries();
-    let mgr = WindowManager::from_log(&entries);
-    let windows = mgr.windows.clone();
+    let entry_count = entries.len();
+    let mut mgr = WindowManager::from_log(&entries);
+
+    // Restore focus: если entry_count не изменился, храним фокус; если изменился — сброс в конец
+    if entry_count == *prev_entry_count.read() {
+        if let Some(focus) = *focus_signal.read() {
+            if focus < mgr.windows.len() {
+                mgr.focus_out = Some(focus);
+            }
+        }
+    } else {
+        // Новые записи — фокус на последнее окно (from_log default)
+        focus_signal.set(mgr.focus_out);
+    }
+    prev_entry_count.set(entry_count);
+    focus_signal.set(mgr.focus_out);
+
+    // Добавляем окно-подтверждение, если есть pending confirmation
+    let mut windows = mgr.windows.clone();
+    if let Some(pending) = load_pending_confirmation_direct() {
+        let id = format!("__confirm__{}", pending.plan_hash);
+        // Проверяем, не добавлено ли уже окно
+        if !windows.iter().any(|w| w.id == id) {
+            windows.push_back(crate::window::Window {
+                id,
+                kind: crate::window::WindowKind::Confirm {
+                    prompt: pending.plan_summary.summary,
+                },
+                created_at: chrono::Utc::now().to_rfc3339(),
+            });
+            focus_signal.set(Some(windows.len() - 1));
+        }
+    }
 
     rsx! {
         div {
@@ -103,7 +174,7 @@ fn app() -> Element {
                                 border-left: 3px solid {};
                                 margin-bottom: 2px;
                             ",
-                                if Some(i) == mgr.focus_out { "#569cd6" } else { "transparent" }
+                                if Some(i) == *focus_signal.read() { "#569cd6" } else { "transparent" }
                             ),
                             "{render_window_content(win)}"
                         }
@@ -168,6 +239,18 @@ fn app() -> Element {
             }
         }
     }
+}
+
+/// Helper: directly append a system event to the in-memory log (for local commands like help/mode).
+fn append_system_event_direct(description: &str) {
+    use crate::types::LogEntry;
+    let entry = LogEntry::new_system_event("ui", "ui", description);
+    append_live_entry(entry);
+}
+
+/// Helper: check if there's a pending confirmation on disk.
+fn load_pending_confirmation_direct() -> Option<crate::ask::PendingConfirmationState> {
+    crate::ask::load_pending_confirmation().ok().flatten()
 }
 
 fn render_window_content(win: &crate::window::Window) -> String {

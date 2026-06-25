@@ -3,7 +3,7 @@
 use clap::Parser;
 use terio::ask::{self, AskResult};
 use terio::cache::ScriptCache;
-use terio::cli::{Cli, Command, ConfigCmd};
+use terio::cli::{Cli, Command, ConfigCmd, SandboxCmd};
 use terio::config::Config;
 use terio::identity::Identity;
 use terio::log::reader::JsonlLogReader;
@@ -130,6 +130,10 @@ fn main() -> anyhow::Result<()> {
 
         Some(Command::Repeat) => {
             handle_repeat(&identity, &log_dir)?;
+        }
+
+        Some(Command::Sandbox(cmd)) => {
+            handle_sandbox(cmd)?;
         }
     }
 
@@ -450,6 +454,42 @@ fn handle_repeat(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Resu
     Ok(())
 }
 
+fn handle_sandbox(cmd: SandboxCmd) -> anyhow::Result<()> {
+    match cmd {
+        SandboxCmd::Status => {
+            let config = Config::load().unwrap_or_default();
+            println!("=== terio sandbox status ===");
+            println!(
+                "Read isolation:      {}",
+                if config.sandbox.read_isolation {
+                    "strict (empty rootfs + bind mounts)"
+                } else {
+                    "legacy (--ro-bind / /)"
+                }
+            );
+            println!(
+                "Bubblewrap binary:   {}",
+                undo::find_bwrap_binary()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "NOT FOUND".to_string())
+            );
+            let no_read = if config.sandbox.no_read_paths.is_empty() {
+                "none".to_string()
+            } else {
+                config.sandbox.no_read_paths.join(", ")
+            };
+            println!("No-read paths:       {}", no_read);
+            println!("Auto-trust:          read_only={} success, local_write={} success, destructive=never",
+                config.auto_trust.read_only, config.auto_trust.local_write);
+            println!("Undo mode:           {:?}", config.undo.mode);
+            println!("Undo enabled:        {}", config.undo.experimental_enabled);
+            println!("Attention mode:      {:?}", config.attention_mode);
+            println!("Last undo status:    {:?}", undo::latest_status().ok());
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -732,6 +772,22 @@ fn process_one_ui_command(
         }
         UiCommand::Scroll(lines) => {
             append_system_event(identity, store, &format!("scroll {lines}"))?;
+        }
+        UiCommand::Help => {
+            // Help handled directly in UI layer, but if it arrives here, log it
+            append_system_event(identity, store, "help requested")?;
+        }
+        UiCommand::Mode(mode) => {
+            let mut config = Config::load().unwrap_or_default();
+            match config.set("attention_mode", &mode) {
+                Ok(_) => {
+                    config.save()?;
+                    append_system_event(identity, store, &format!("attention mode: {mode}"))?;
+                }
+                Err(e) => {
+                    append_system_event(identity, store, &format!("mode error: {e}"))?;
+                }
+            }
         }
         UiCommand::Repeat => {
             let entries = store.recent(50)?;

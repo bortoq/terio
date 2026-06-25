@@ -88,6 +88,64 @@ pub enum AttentionMode {
     Debug,
 }
 
+/// Настройки песочницы (Phase 1: CoW sandbox).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Включить строгую изоляцию чтения (пустой rootfs + bind mounts вместо --ro-bind / /)
+    #[serde(default)]
+    pub read_isolation: bool,
+    /// Пути, которые НЕ должны быть доступны на чтение внутри песочницы.
+    /// Поддерживаются ~ (HOME) и относительные пути от cwd.
+    #[serde(default)]
+    pub no_read_paths: Vec<String>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            read_isolation: false, // legacy: --ro-bind / /
+            no_read_paths: vec![
+                "~/.ssh".to_string(),
+                "~/.gnupg".to_string(),
+                "~/.config/git".to_string(),
+                "~/.aws".to_string(),
+                "~/.azure".to_string(),
+                "~/.env".to_string(),
+            ],
+        }
+    }
+}
+
+/// Пороги автодоверия для разных уровней риска (Phase 1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoTrustConfig {
+    /// ReadOnly: N успехов → trusted (1 = сразу)
+    #[serde(default = "default_read_only_trust")]
+    pub read_only: u32,
+    /// LocalWrite: N успехов → trusted
+    #[serde(default = "default_local_write_trust")]
+    pub local_write: u32,
+    /// Destructive, NetworkWrite, CredentialAccess: never auto-trust
+    pub never: bool,
+}
+
+const fn default_read_only_trust() -> u32 {
+    1
+}
+const fn default_local_write_trust() -> u32 {
+    3
+}
+
+impl Default for AutoTrustConfig {
+    fn default() -> Self {
+        Self {
+            read_only: 1,
+            local_write: 3,
+            never: true,
+        }
+    }
+}
+
 /// Top-level config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -108,6 +166,12 @@ pub struct Config {
     /// Режим внимания: quiet | normal | debug
     #[serde(default)]
     pub attention_mode: AttentionMode,
+    /// Настройки песочницы (Phase 1)
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
+    /// Пороги автодоверия (Phase 1)
+    #[serde(default)]
+    pub auto_trust: AutoTrustConfig,
 }
 
 impl Config {
@@ -210,6 +274,29 @@ impl Config {
                         anyhow::bail!("unknown attention mode: {other}. Use: quiet, normal, debug")
                     }
                 };
+            }
+            "sandbox.read_isolation" => {
+                self.sandbox.read_isolation = match value {
+                    "true" | "1" | "yes" => true,
+                    "false" | "0" | "no" => false,
+                    other => anyhow::bail!("unknown bool: {other}"),
+                };
+            }
+            "sandbox.no_read_paths" => {
+                self.sandbox.no_read_paths =
+                    value.split(',').map(|s| s.trim().to_string()).collect();
+            }
+            "auto_trust.read_only" => {
+                let n: u32 = value
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid number: {value}"))?;
+                self.auto_trust.read_only = n;
+            }
+            "auto_trust.local_write" => {
+                let n: u32 = value
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid number: {value}"))?;
+                self.auto_trust.local_write = n;
             }
             _ => anyhow::bail!("unknown config key: {key}"),
         }
@@ -370,6 +457,45 @@ mod tests {
             .insert("abc".to_string(), TrustPolicy::Allow);
         let rendered = config.render_for_display();
         assert!(rendered.contains("1 overrides"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_config_sandbox_defaults() {
+        let config = Config::default();
+        assert!(!config.sandbox.read_isolation);
+        assert!(config.sandbox.no_read_paths.contains(&"~/.ssh".to_string()));
+        assert_eq!(config.auto_trust.read_only, 1);
+        assert_eq!(config.auto_trust.local_write, 3);
+        assert!(config.auto_trust.never);
+    }
+
+    #[test]
+    fn test_config_set_sandbox_read_isolation() {
+        let mut config = Config::default();
+        config.set("sandbox.read_isolation", "true").unwrap();
+        assert!(config.sandbox.read_isolation);
+    }
+
+    #[test]
+    fn test_config_set_sandbox_no_read_paths() {
+        let mut config = Config::default();
+        config
+            .set("sandbox.no_read_paths", "~/.ssh,~/.aws")
+            .unwrap();
+        assert_eq!(
+            config.sandbox.no_read_paths,
+            vec!["~/.ssh".to_string(), "~/.aws".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_config_set_auto_trust() {
+        let mut config = Config::default();
+        config.set("auto_trust.read_only", "5").unwrap();
+        assert_eq!(config.auto_trust.read_only, 5);
+        config.set("auto_trust.local_write", "10").unwrap();
+        assert_eq!(config.auto_trust.local_write, 10);
     }
 
     #[cfg(unix)]
