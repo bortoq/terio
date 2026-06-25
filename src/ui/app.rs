@@ -40,6 +40,8 @@ fn app() -> Element {
     // FocusOut persistence: храним индекс фокуса между рендерами
     let mut focus_signal = use_signal(|| None::<usize>);
     let mut prev_entry_count = use_signal(|| 0_usize);
+    // Scroll offset: viewport scroll position for scroll command
+    let mut scroll_offset = use_signal(|| 0_i32);
 
     // Подписка на live-стрим
     use_future(move || {
@@ -63,33 +65,32 @@ fn app() -> Element {
         }
     });
 
-    // Input routing: parse input, send appropriate UiCommand
+    // Input routing: parse input, handle locally or send to backend
     let mut on_submit = move |_| {
         let val = input_text();
         let val = val.trim().to_string();
         if !val.is_empty() {
             let cmd = parse_input(&val);
-            // Help is handled locally (no async needed)
-            if matches!(cmd, UiCommand::Help) {
-                let msg = concat!(
-                    "terio commands:\n",
-                    "  help              this help\n",
-                    "  mode <quiet|normal|debug>  attention mode\n",
-                    "  focus <up|down>   focus output window\n",
-                    "  scroll <N>        scroll output\n",
-                    "  repeat            repeat last request\n",
-                    "  y / confirm y     confirm pending plan\n",
-                    "  n / confirm n     decline\n",
-                    "  undo              undo last operation\n",
-                    "  redo              redo last undo\n",
-                    "  <anything else>    send as LLM ask"
-                );
-                append_system_event_direct(msg);
-                undo_status.set(refresh_undo_status());
-                refresh_tick += 1;
-            } else if matches!(cmd, UiCommand::Mode(_)) {
-                // Mode is handled locally
-                if let UiCommand::Mode(ref m) = cmd {
+            match &cmd {
+                UiCommand::Help => {
+                    let msg = concat!(
+                        "terio commands:\n",
+                        "  help              this help\n",
+                        "  mode <quiet|normal|debug>  attention mode\n",
+                        "  focus <up|down>   focus output window\n",
+                        "  scroll <N>        scroll output\n",
+                        "  repeat            repeat last request\n",
+                        "  y / confirm y     confirm pending plan\n",
+                        "  n / confirm n     decline\n",
+                        "  undo              undo last operation\n",
+                        "  redo              redo last undo\n",
+                        "  <anything else>    send as LLM ask"
+                    );
+                    append_system_event_direct(msg);
+                    undo_status.set(refresh_undo_status());
+                    refresh_tick += 1;
+                }
+                UiCommand::Mode(m) => {
                     let mut config = crate::config::Config::load().unwrap_or_default();
                     let result = config.set("attention_mode", m);
                     if let Err(ref e) = result {
@@ -98,12 +99,38 @@ fn app() -> Element {
                         let _ = config.save();
                         append_system_event_direct(&format!("attention mode: {m}"));
                     }
+                    undo_status.set(refresh_undo_status());
+                    refresh_tick += 1;
                 }
-                undo_status.set(refresh_undo_status());
-                refresh_tick += 1;
-            } else {
-                activity_state.set(ActivityState::Busy);
-                send_ui_command(cmd);
+                UiCommand::Focus(direction) => {
+                    // Local focus handling (clamped on render)
+                    let cur = focus_signal.read().unwrap_or(0);
+                    let new_focus = match direction.as_str() {
+                        "up" | "↑" => cur.saturating_sub(1),
+                        "down" | "↓" => cur.saturating_add(1),
+                        _ => focus_signal.read().unwrap_or(0),
+                    };
+                    focus_signal.set(Some(new_focus));
+                    activity_state.set(ActivityState::Idle);
+                    refresh_tick += 1;
+                }
+                UiCommand::Scroll(n) => {
+                    // Local scroll offset (clamped on render)
+                    let new_offset = scroll_offset.read().saturating_add(*n).max(0);
+                    scroll_offset.set(new_offset);
+                    activity_state.set(ActivityState::Idle);
+                    refresh_tick += 1;
+                }
+                UiCommand::Repeat => {
+                    // Repeat goes to backend (needs log access)
+                    activity_state.set(ActivityState::Busy);
+                    send_ui_command(cmd);
+                }
+                _ => {
+                    // Ask, Confirm, Undo, Redo — send to backend
+                    activity_state.set(ActivityState::Busy);
+                    send_ui_command(cmd);
+                }
             }
         }
         input_text.set(String::new());
@@ -257,5 +284,6 @@ fn render_window_content(win: &crate::window::Window) -> String {
     match &win.kind {
         WindowKind::Text(content) => content.clone(),
         WindowKind::Confirm { prompt } => format!("[?] {} [y/N]", prompt),
+        WindowKind::Rich { url, mime } => format!("[{}] {}", mime, url),
     }
 }

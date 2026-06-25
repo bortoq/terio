@@ -62,12 +62,13 @@ terio под капотом использует LLM, кеш скриптов и
 
 ## Фаза 1. Песочница (CoW)
 
-- [x] Copy-on-Write для untrusted-команд (на базе undo.rs / bubblewrap)
-- [x] Snapshot до выполнения, rollback при ошибке/отмене
-- [x] Untrusted → Trusted после 1 успеха (N=1 для read-only, N=3 для local_write)
-- [x] Изоляция чтения: bwrap с пустым rootfs + bind mounts (strict mode)
-- [x] Белые списки no_read_paths в конфиге
+- [~] Copy-on-Write — best-effort snapshot (undo.rs), не настоящая CoW-FS [x baseline, ] overlayfs/unionfs]
+- [x] Snapshot до выполнения, rollback при ошибке/отмене (undo.rs)
+- [~] Untrusted → Trusted после 1 успеха (N=1 read-only, N=3 local_write) [x config, ~ enforcement]
+- [~] Изоляция чтения: bwrap strict mode (пустой rootfs + bind mounts) [x strict mode, ~ no full isolation]
+- [x] Белые списки no_read_paths в конфиге (6 default entries)
 - [x] `terio sandbox status` — просмотр состояния песочницы
+- [~] Fail closed: strict mode без bwrap → ошибка, не downgrade [x implemented this audit]
 
 ## Фаза 2. Скриптовая система
 

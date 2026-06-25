@@ -118,7 +118,8 @@ pub fn start_session(
 }
 
 impl UndoSession {
-    pub fn wrap_command(&mut self, argv: &[String]) -> WrappedCommand {
+    pub fn wrap_command(&mut self, argv: &[String]) -> anyhow::Result<WrappedCommand> {
+        let config = crate::config::Config::load().unwrap_or_default();
         let wrapped = wrap_command_for_mode(
             &self.record.mode,
             argv,
@@ -126,6 +127,16 @@ impl UndoSession {
             &home_dir().unwrap_or_else(|_| self.cwd.clone()),
             find_bwrap_binary(),
         );
+        // В strict режиме (read_isolation=true) без bwrap — блокируем выполнение
+        if config.sandbox.read_isolation
+            && !wrapped.sandboxed
+            && matches!(self.record.mode, UndoMode::Bubblewrap)
+        {
+            anyhow::bail!(
+                "terio: строгая изоляция (sandbox.read_isolation=true) требует bubblewrap (bwrap).
+                 Установите bubblewrap или отключите: terio config set sandbox.read_isolation false"
+            );
+        }
         if wrapped.sandboxed {
             self.record.sandboxed = true;
         }
@@ -134,7 +145,7 @@ impl UndoSession {
                 self.record.warnings.push(warning.clone());
             }
         }
-        wrapped
+        Ok(wrapped)
     }
 
     pub fn finalize_success(mut self) -> Result<UndoRecord> {
@@ -596,7 +607,9 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let wrapped = session.wrap_command(&["touch".into(), "note.txt".into()]);
+        let wrapped = session
+            .wrap_command(&["touch".into(), "note.txt".into()])
+            .unwrap();
         assert!(!wrapped.sandboxed);
 
         std::fs::write(cwd.join("note.txt"), "after").unwrap();

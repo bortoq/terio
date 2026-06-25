@@ -11,6 +11,8 @@ pub enum WindowKind {
     Text(String),
     /// Подтверждение: prompt + команда, которая выполнится при y
     Confirm { prompt: String },
+    /// Rich-медиа (Phase 2): url + mime-тип для рендеринга плеером/браузером
+    Rich { url: String, mime: String },
 }
 
 /// Окно — базовый элемент отображения.
@@ -157,6 +159,7 @@ impl WindowManager {
             .map(|w| match &w.kind {
                 WindowKind::Text(content) => content.clone(),
                 WindowKind::Confirm { prompt } => format!("[confirm] {}", prompt),
+                WindowKind::Rich { url, mime } => format!("[{}] {}", mime, url),
             })
             .collect()
     }

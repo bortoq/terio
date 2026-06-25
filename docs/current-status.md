@@ -89,7 +89,7 @@
 
 ## Тесты
 
-- 143+ unit-тестов (lib)
+- 147 unit-тестов (lib); `cargo test` для точного числа
 - CI: `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo build` + `cargo test`
 
 ---

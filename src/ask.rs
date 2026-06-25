@@ -285,7 +285,7 @@ fn execute_cached_steps(
 
     for step in steps {
         let argv = if let Some(session) = session.as_mut() {
-            session.wrap_command(&step.argv).argv
+            session.wrap_command(&step.argv)?.argv
         } else {
             step.argv.clone()
         };
@@ -324,7 +324,7 @@ fn execute_agent_plan_commands(
 
     for cmd in commands {
         let argv = if let Some(session) = session.as_mut() {
-            session.wrap_command(&cmd.argv).argv
+            session.wrap_command(&cmd.argv)?.argv
         } else {
             cmd.argv.clone()
         };
