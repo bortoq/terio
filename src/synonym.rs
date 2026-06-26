@@ -2,6 +2,7 @@
 // Отображает нормализованный запрос пользователя → ScriptId.
 // Автоматически пополняется из успешных LLM-запросов.
 
+use crate::types::RiskLevel;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,8 +12,30 @@ use std::path::{Path, PathBuf};
 // Data types
 // ---------------------------------------------------------------------------
 
+/// Тип совпадения при поиске синонима.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind {
+    /// Точное совпадение (normalized).
+    Exact,
+    /// Префиксное совпадение.
+    Prefix,
+    /// Bag-of-words совпадение (перестановка слов).
+    BagOfWords,
+}
+
+impl MatchKind {
+    /// Человекочитаемое имя.
+    pub fn name(&self) -> &'static str {
+        match self {
+            MatchKind::Exact => "exact",
+            MatchKind::Prefix => "prefix",
+            MatchKind::BagOfWords => "bag-of-words",
+        }
+    }
+}
+
 /// Запись синонима: отображает пользовательский запрос на script_id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SynonymEntry {
     /// ID скрипта, который обрабатывает этот запрос
     pub script_id: String,
@@ -93,17 +116,31 @@ impl SynonymIndex {
         words.sort();
         words.join(" ").to_lowercase()
     }
+}
 
+/// Тип совпадения при поиске.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LookupResult<'a> {
+    /// Как было найдено.
+    pub match_kind: MatchKind,
+    /// Запись синонима.
+    pub entry: &'a SynonymEntry,
+}
+
+impl SynonymIndex {
     /// Найти script_id по запросу.
-    /// 1) Точное совпадение (normalized).
-    /// 2) Prefix match: запрос начинается с ключа (сначала более длинные ключи).
-    /// 3) Bag-of-words: слова совпадают независимо от порядка.
-    pub fn lookup(&self, query: &str) -> Option<&SynonymEntry> {
+    /// 1) Точное совпадение (normalized) — Exact.
+    /// 2) Prefix match: запрос начинается с ключа — Prefix.
+    /// 3) Bag-of-words: слова совпадают независимо от порядка — BagOfWords.
+    pub fn lookup(&self, query: &str) -> Option<LookupResult<'_>> {
         let normalized = Self::normalize(query);
 
         // 1. Точное совпадение
         if let Some(entry) = self.entries.get(&normalized) {
-            return Some(entry);
+            return Some(LookupResult {
+                match_kind: MatchKind::Exact,
+                entry,
+            });
         }
 
         // 2. Prefix match: проверяем от более длинных к более коротким (specificity)
@@ -120,7 +157,10 @@ impl SynonymIndex {
         // Сортируем: сначала более длинные ключи
         prefix_candidates.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
         if let Some((_, entry)) = prefix_candidates.into_iter().next() {
-            return Some(entry);
+            return Some(LookupResult {
+                match_kind: MatchKind::Prefix,
+                entry,
+            });
         }
 
         // 3. Bag-of-words match
@@ -128,11 +168,26 @@ impl SynonymIndex {
         for (norm_key, entry) in &self.entries {
             let key_bag = Self::normalize_bag(norm_key);
             if query_bag == key_bag {
-                return Some(entry);
+                return Some(LookupResult {
+                    match_kind: MatchKind::BagOfWords,
+                    entry,
+                });
             }
         }
 
         None
+    }
+
+    /// Требуется ли подтверждение для данного совпадения.
+    /// Для Exact — не требуется (безопасно).
+    /// Для Prefix/BagOfWords — требуется, если скрипт не ReadOnly.
+    pub fn requires_confirmation(lookup: &LookupResult<'_>, risk: &RiskLevel) -> bool {
+        match lookup.match_kind {
+            MatchKind::Exact => false,
+            MatchKind::Prefix | MatchKind::BagOfWords => {
+                !matches!(risk, RiskLevel::ReadOnly | RiskLevel::NetworkRead)
+            }
+        }
     }
 
     /// Добавить или обновить синоним.
@@ -226,32 +281,36 @@ mod tests {
     fn test_lookup_exact_match() {
         let mut idx = make_index();
         idx.add("list files", "ls_script");
-        let entry = idx.lookup("list files").unwrap();
-        assert_eq!(entry.script_id, "ls_script");
+        let result = idx.lookup("list files").unwrap();
+        assert_eq!(result.match_kind, MatchKind::Exact);
+        assert_eq!(result.entry.script_id, "ls_script");
     }
 
     #[test]
     fn test_lookup_case_insensitive() {
         let mut idx = make_index();
         idx.add("list files", "ls_script");
-        let entry = idx.lookup("LIST FILES").unwrap();
-        assert_eq!(entry.script_id, "ls_script");
+        let result = idx.lookup("LIST FILES").unwrap();
+        assert_eq!(result.match_kind, MatchKind::Exact);
+        assert_eq!(result.entry.script_id, "ls_script");
     }
 
     #[test]
     fn test_lookup_word_order_invariant() {
         let mut idx = make_index();
         idx.add("list files", "ls_script");
-        let entry = idx.lookup("files list").unwrap();
-        assert_eq!(entry.script_id, "ls_script");
+        let result = idx.lookup("files list").unwrap();
+        assert_eq!(result.match_kind, MatchKind::BagOfWords);
+        assert_eq!(result.entry.script_id, "ls_script");
     }
 
     #[test]
     fn test_lookup_prefix_match() {
         let mut idx = make_index();
         idx.add("list files", "ls_script");
-        let entry = idx.lookup("list files in /tmp").unwrap();
-        assert_eq!(entry.script_id, "ls_script");
+        let result = idx.lookup("list files in /tmp").unwrap();
+        assert_eq!(result.match_kind, MatchKind::Prefix);
+        assert_eq!(result.entry.script_id, "ls_script");
     }
 
     #[test]
@@ -305,19 +364,19 @@ mod tests {
         }
         {
             let idx = SynonymIndex::load(&path).unwrap();
-            let entry = idx.lookup("list files").unwrap();
-            assert_eq!(entry.script_id, "ls_script");
+            let result = idx.lookup("list files").unwrap();
+            assert_eq!(result.entry.script_id, "ls_script");
         }
     }
 
     #[test]
     fn test_lookup_returns_highest_frequency_in_prefix() {
-        // Prefix match picks the first match (insertion order for now)
         let mut idx = make_index();
         idx.add("list", "list_all");
         idx.add("list files", "ls_script");
         // "list files in /tmp" should match "list files" first (more specific)
-        let entry = idx.lookup("list files in /tmp").unwrap();
-        assert_eq!(entry.script_id, "ls_script");
+        let result = idx.lookup("list files in /tmp").unwrap();
+        assert_eq!(result.match_kind, MatchKind::Prefix);
+        assert_eq!(result.entry.script_id, "ls_script");
     }
 }

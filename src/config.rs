@@ -146,6 +146,37 @@ impl Default for AutoTrustConfig {
     }
 }
 
+/// Настройки проактивного режима (Phase 4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveConfig {
+    /// Включить проактивные предсказания
+    #[serde(default = "default_proactive_enabled")]
+    pub enabled: bool,
+    /// Автоматически выполнять предсказания (если true и confidence > 0.95)
+    #[serde(default)]
+    pub auto_execute: bool,
+    /// Максимальная глубина цепочки авто-выполнений
+    #[serde(default = "default_proactive_max_depth")]
+    pub max_auto_exec_depth: u32,
+}
+
+fn default_proactive_enabled() -> bool {
+    true
+}
+fn default_proactive_max_depth() -> u32 {
+    1
+}
+
+impl Default for ProactiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_execute: false, // OFF by default — only suggestions
+            max_auto_exec_depth: 1,
+        }
+    }
+}
+
 /// Настройки стоимости (Phase 5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostConfig {
@@ -230,6 +261,9 @@ pub struct Config {
     /// Настройки стоимости (Phase 5)
     #[serde(default)]
     pub cost: CostConfig,
+    /// Настройки проактивного режима (Phase 4)
+    #[serde(default)]
+    pub proactive: ProactiveConfig,
 }
 
 impl Config {

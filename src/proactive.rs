@@ -6,7 +6,6 @@
 use crate::log::reader::JsonlLogReader;
 use crate::log::LogReader;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Получить директорию данных (~/.terio).
@@ -28,13 +27,11 @@ pub struct Prediction {
     pub confidence: f64,
 }
 
-/// Проактивный движок: строит n-gram модель из лога и предсказывает следующий запрос.
+/// Проактивный движок: использует BayesianPredictor из accounting для предсказаний.
 #[derive(Debug, Clone)]
 pub struct ProactiveEngine {
-    /// Transition matrix: last_request -> {next_request: count}
-    transitions: HashMap<String, HashMap<String, u64>>,
-    /// Общее количество переходов.
-    total_transitions: u64,
+    /// Байесовский предиктор.
+    predictor: crate::accounting::BayesianPredictor,
     /// Количество авто-выполненных предсказаний.
     auto_executed: u64,
 }
@@ -42,8 +39,7 @@ pub struct ProactiveEngine {
 impl ProactiveEngine {
     pub fn new() -> Self {
         Self {
-            transitions: HashMap::new(),
-            total_transitions: 0,
+            predictor: crate::accounting::BayesianPredictor::new(),
             auto_executed: 0,
         }
     }
@@ -53,47 +49,37 @@ impl ProactiveEngine {
         let reader = JsonlLogReader::new(log_dir);
         let entries = reader.recent(max_entries)?;
 
-        let mut engine = Self::new();
-
-        // Извлекаем запросы с request-полем, сохраняя порядок
+        let mut predictor = crate::accounting::BayesianPredictor::new();
         let requests: Vec<String> = entries.iter().filter_map(|e| e.request.clone()).collect();
-
-        // Строим биграмную модель переходов
-        for window in requests.windows(2) {
-            let prev = &window[0];
-            let next = &window[1];
-            let inner = engine.transitions.entry(prev.clone()).or_default();
-            *inner.entry(next.clone()).or_insert(0) += 1;
-            engine.total_transitions += 1;
-        }
+        predictor.observe(&requests);
 
         // Загружаем счётчик авто-выполненных
         let data_dir = data_dir();
         std::fs::create_dir_all(&data_dir).ok();
         let count_file = data_dir.join("auto_executed_count");
-        if count_file.exists() {
-            if let Ok(s) = std::fs::read_to_string(&count_file) {
-                engine.auto_executed = s.trim().parse().unwrap_or(0);
-            }
-        }
+        let auto_executed = if count_file.exists() {
+            std::fs::read_to_string(&count_file)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0)
+        } else {
+            0
+        };
 
-        Ok(engine)
+        Ok(Self {
+            predictor,
+            auto_executed,
+        })
     }
 
-    /// Предсказать следующий запрос.
+    /// Предсказать следующий запрос (делегирует BayesianPredictor).
     pub fn predict(&self, last_request: &str) -> Option<Prediction> {
-        let inner = self.transitions.get(last_request)?;
-        let total_from_state: u64 = inner.values().sum();
-        if total_from_state == 0 {
-            return None;
-        }
-        // Находим самый частый следующий запрос
-        let (best_next, best_count) = inner.iter().max_by_key(|(_, &count)| count)?;
-        let confidence = *best_count as f64 / total_from_state as f64;
-        Some(Prediction {
-            request: best_next.clone(),
-            confidence,
-        })
+        self.predictor
+            .predict(last_request)
+            .map(|(req, conf)| Prediction {
+                request: req,
+                confidence: conf,
+            })
     }
 
     /// Записать запрос в историю для transition model.

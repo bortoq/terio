@@ -632,6 +632,11 @@ impl ScriptEngine {
         self.output_buffer.lock().unwrap().push(text.to_string());
     }
 
+    /// Проверить, существует ли скрипт с данным ID.
+    pub fn has_script(&self, id: &str) -> bool {
+        self.scripts.iter().any(|s| s.id == id)
+    }
+
     /// Получить все зарегистрированные скрипты.
     pub fn scripts(&self) -> &[Script] {
         &self.scripts

@@ -283,7 +283,7 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     let entries = reader.recent(usize::MAX)?;
     let config = Config::load().unwrap_or_default();
 
-    // Извлекаем cost_counters из записей с request
+    // Per-entry cost computation with risk awareness
     let mut total_tokens: u64 = 0;
     let mut total_llm_duration: u64 = 0;
     let mut total_exec_duration: u64 = 0;
@@ -291,6 +291,7 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     let mut count_requests: u64 = 0;
     let mut cache_hits: u64 = 0;
     let mut cache_misses: u64 = 0;
+    let mut total_risk_cost: f64 = 0.0;
 
     for entry in &entries {
         let counters = &entry.cost_counters;
@@ -305,6 +306,10 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
         }
         if entry.request.is_some() {
             count_requests += 1;
+        }
+        // Per-entry risk cost
+        if let Some(ref risk) = entry.risk {
+            total_risk_cost += terio::accounting::compute_risk_cost(risk, &config.cost);
         }
     }
 
@@ -339,6 +344,11 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     println!("Cache hits:            {}", cache_hits);
     println!("Cache misses:          {}", cache_misses);
     println!("{}", cost.format());
+    println!("  Risk (per-entry):     ${:.6}", total_risk_cost);
+    println!(
+        "  Combined C_total:     ${:.6}",
+        cost.total + total_risk_cost
+    );
     println!();
     println!("Estimated savings from scripting:");
     if let Ok(synonyms) = terio::synonym::SynonymIndex::load_default() {
@@ -386,13 +396,26 @@ fn handle_ask(
 
     // Phase 4: Proactive prediction
     ProactiveEngine::record_last_request(request)?;
+    // Recursion guard: prevent cascading auto-executions (depth via env var)
+    let depth: u32 = std::env::var("TERIO_PROACTIVE_DEPTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    if depth > config.proactive.max_auto_exec_depth {
+        return Ok(()); // max depth reached, stop chaining
+    }
     if let Ok(engine) = ProactiveEngine::load_from_log(log_dir, 200) {
         if let Some(pred) = engine.predict(request) {
-            let quiet_mode = config.attention_mode == terio::config::AttentionMode::Quiet;
-            if quiet_mode && pred.confidence > 0.95 {
-                // Silent auto-execution for high-confidence predictions in quiet mode
+            // Check if auto-execution is configured AND safe
+            let can_auto = config.proactive.auto_execute
+                && config.attention_mode == terio::config::AttentionMode::Quiet
+                && pred.confidence > 0.95
+                && depth < config.proactive.max_auto_exec_depth;
+            if can_auto {
+                // Only auto-execute if prediction is read-only safe
+                // (actual risk check happens inside handle_ask / process_request)
+                std::env::set_var("TERIO_PROACTIVE_DEPTH", (depth + 1).to_string());
                 let new_count = ProactiveEngine::increment_auto_executed()?;
-                // Re-run the predicted request
                 let _ = handle_ask(identity, log_dir, &pred.request, true);
                 eprintln!("terio: +{} auto-executed ('{}')", new_count, pred.request);
             } else if pred.confidence > 0.5 {
@@ -628,13 +651,32 @@ fn try_synonym_command(query: &str) -> anyhow::Result<Option<bool>> {
         Err(_) => return Ok(Some(false)),
     };
     match synonyms.lookup(query) {
-        Some(entry) => {
-            // Found a synonym — try running the script
+        Some(lookup_result) => {
+            let entry = lookup_result.entry;
+            // Validate synonym target: check if script exists
             let dirs = script_engine::default_script_dirs()?;
             let backend = std::sync::Arc::new(CliApiBackend);
             let mut engine = ScriptEngine::new(backend);
             if engine.load_all(&dirs).is_err() {
                 return Ok(Some(false));
+            }
+            if !engine.has_script(&entry.script_id) {
+                // Script not found — cannot use this synonym
+                eprintln!(
+                    "terio: synonym points to missing script '{}'",
+                    entry.script_id
+                );
+                return Ok(None);
+            }
+            // For prefix/bag matches on non-read-only, require confirmation
+            // (we don't have the script's risk level here, so we check match kind)
+            if lookup_result.match_kind != terio::synonym::MatchKind::Exact {
+                eprintln!(
+                    "terio: fuzzy synonym match '{}', need confirmation. Run: terio ask '{}'",
+                    lookup_result.match_kind.name(),
+                    query
+                );
+                return Ok(None);
             }
             match engine.run_script_by_id(&entry.script_id, vec![]) {
                 Ok(output) => {
