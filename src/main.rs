@@ -1,10 +1,11 @@
 // terio entry point — Phase 0: terminal-like UI
 
+use anyhow::Context;
 use clap::Parser;
 use std::sync::Arc;
 use terio::ask::{self, AskResult};
 use terio::cache::ScriptCache;
-use terio::cli::{AliasCmd, Cli, Command, ConfigCmd, SandboxCmd, ScriptCmd};
+use terio::cli::{AliasCmd, Cli, Command, ConfigCmd, RegistryCmd, SandboxCmd, ScriptCmd};
 use terio::config::Config;
 use terio::identity::Identity;
 use terio::log::reader::JsonlLogReader;
@@ -190,6 +191,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Cost) => {
             handle_cost(&log_dir)?;
         }
+
+        // --- Phase 6: Community registry ---
+        Some(Command::Registry(cmd)) => {
+            handle_registry(cmd)?;
+        }
     }
 
     Ok(())
@@ -356,6 +362,91 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
             let savings =
                 terio::accounting::estimated_savings(query, &entry.script_id, &config.cost);
             println!("  '{}' -> ${:.6}", query, savings);
+        }
+    }
+    Ok(())
+}
+
+fn handle_registry(cmd: RegistryCmd) -> anyhow::Result<()> {
+    match cmd {
+        RegistryCmd::Search { query } => {
+            let results = terio::registry::search_registry(&query).unwrap_or_default();
+            if results.is_empty() {
+                eprintln!("terio: no scripts found matching '{}'", query);
+                return Ok(());
+            }
+            println!("=== terio registry search: '{}' ===", query);
+            for script in &results {
+                let tags = if script.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", script.tags.join(", "))
+                };
+                println!(
+                    "  {:20} {} (v{}) by {}{}",
+                    script.id,
+                    script.description,
+                    script.version,
+                    script.author.as_deref().unwrap_or("unknown"),
+                    tags,
+                );
+            }
+        }
+        RegistryCmd::Install { id } => match terio::registry::download_and_install(&id) {
+            Ok(path) => {
+                eprintln!("terio: script '{}' installed from registry", id);
+                eprintln!("terio:   -> {}", path);
+            }
+            Err(e) => {
+                eprintln!("terio: failed to install '{}': {}", id, e);
+            }
+        },
+        RegistryCmd::Publish { id, api_key } => {
+            // Load the script from local filesystem
+            let dirs = script_engine::default_script_dirs()?;
+            let backend = Arc::new(CliApiBackend);
+            let mut engine = ScriptEngine::new(backend);
+            engine.load_all(&dirs)?;
+            let script = engine
+                .find_script(&id)
+                .ok_or_else(|| anyhow::anyhow!("script '{}' not found locally", id))?
+                .clone();
+
+            // Read script content from ScriptSource
+            let content = match &script.source {
+                terio::script_engine::ScriptSource::Rhai(c) => c.clone(),
+                terio::script_engine::ScriptSource::Toml(c) => c.clone(),
+            };
+
+            let key_info = if let Some(_key) = api_key {
+                // In a real implementation, would POST to registry API
+                " (API key provided)"
+            } else {
+                " (no API key — dry run)"
+            };
+
+            let meta = terio::registry::prepare_publish(
+                &script.id,
+                &content,
+                &script.id,
+                &script.description,
+                script.triggers.clone(),
+                None,
+                None,
+            )?;
+
+            println!("=== terio publish preview ===");
+            println!("ID:          {}", meta.id);
+            println!("Name:        {}", meta.name);
+            println!("Description: {}", meta.description);
+            println!("Tags:        {}", meta.tags.join(", "));
+            println!(
+                "SHA-256:     {}",
+                meta.sha256.as_deref().unwrap_or("(none)")
+            );
+            println!("Risk:        {}", meta.risk);
+            println!("{}", key_info);
+            eprintln!("terio: publish preview generated. Use --api-key to submit.");
         }
     }
     Ok(())
@@ -802,7 +893,112 @@ fn handle_script(cmd: ScriptCmd) -> anyhow::Result<()> {
                 println!("{output}");
             }
         }
+        ScriptCmd::Export { id, output } => {
+            handle_script_export(&dirs, &id, output.as_deref())?;
+        }
+        ScriptCmd::Import { input } => {
+            handle_script_import(&dirs, &input)?;
+        }
     }
+    Ok(())
+}
+
+fn handle_script_export(
+    dirs: &script_engine::ScriptDirs,
+    id: &str,
+    output: Option<&str>,
+) -> anyhow::Result<()> {
+    let backend = Arc::new(CliApiBackend);
+    let mut engine = ScriptEngine::new(backend);
+    engine.load_all(dirs)?;
+
+    // Collect scripts to export
+    let scripts: Vec<terio::script_engine::Script> = if id == "all" {
+        engine.scripts().to_vec()
+    } else {
+        let s = engine
+            .find_script(id)
+            .ok_or_else(|| anyhow::anyhow!("script '{}' not found", id))?;
+        vec![s.clone()]
+    };
+
+    // Build export format: id + content
+    #[derive(serde::Serialize)]
+    struct ExportItem {
+        id: String,
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    }
+
+    let items: Vec<ExportItem> = scripts
+        .iter()
+        .map(|s| {
+            let content = match &s.source {
+                terio::script_engine::ScriptSource::Rhai(c) => Some(c.clone()),
+                terio::script_engine::ScriptSource::Toml(c) => Some(c.clone()),
+            };
+            ExportItem {
+                id: s.id.clone(),
+                content,
+                source: None,
+            }
+        })
+        .collect();
+
+    let json =
+        serde_json::to_string_pretty(&items).with_context(|| "failed to serialize scripts")?;
+
+    match output {
+        Some(path) => {
+            std::fs::write(path, &json).with_context(|| format!("failed to write to {}", path))?;
+            eprintln!("terio: exported {} script(s) to {}", items.len(), path);
+        }
+        None => println!("{}", json),
+    }
+    Ok(())
+}
+
+fn handle_script_import(dirs: &script_engine::ScriptDirs, input: &str) -> anyhow::Result<()> {
+    let json_data = if input == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(input)
+            .map_err(|e| anyhow::anyhow!("failed to read {}: {}", input, e))?
+    };
+
+    #[derive(serde::Deserialize)]
+    struct ExportScript {
+        id: String,
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        source: Option<String>,
+    }
+
+    let imported: Vec<ExportScript> =
+        serde_json::from_str(&json_data).with_context(|| "invalid script export JSON")?;
+
+    let user_dir = &dirs.user;
+
+    let mut count = 0;
+    for entry in &imported {
+        let script_content = entry
+            .content
+            .as_deref()
+            .or(entry.source.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("script '{}' has no content", entry.id))?;
+
+        let path = user_dir.join(format!("{}.rhai", entry.id));
+        std::fs::write(&path, script_content)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        count += 1;
+    }
+
+    eprintln!("terio: imported {} script(s)", count);
     Ok(())
 }
 

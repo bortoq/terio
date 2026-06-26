@@ -404,3 +404,170 @@ mod tests {
         assert_eq!(result.cache_misses, 1);
     }
 }
+
+// ============================================================================
+// Cost-aware route optimizer (Phase 5, real)
+// ============================================================================
+
+/// Результат оптимизации маршрута с обоснованием.
+#[derive(Debug, Clone)]
+pub struct RouteAdvice {
+    /// Выбранный маршрут.
+    pub decision: RouteDecision,
+    /// Обоснование выбора.
+    pub reason: String,
+    /// Предполагаемая стоимость LLM-маршрута ($).
+    pub estimated_llm_cost: f64,
+    /// Предполагаемая стоимость script-маршрута ($).
+    pub estimated_script_cost: f64,
+}
+
+/// Cost-aware route optimizer.
+/// Учитывает:
+/// - Стоимость LLM (токены + внимание + риск)
+/// - Стоимость скрипта (внимание + риск)
+/// - Уверенность BayesianPredictor
+/// - Уровень риска операции
+pub fn optimize_route(
+    request: &str,
+    synonym_script_id: Option<&str>,
+    predictor: Option<&BayesianPredictor>,
+    risk: &RiskLevel,
+    known_script_id: Option<&str>,
+    config: &Config,
+) -> RouteAdvice {
+    let cost_config = &config.cost;
+
+    // 1. Estimate LLM cost for this request
+    let llm_tokens_est = 100u64; // average request ~100 tokens
+    let llm_delay_ms = 5000u64; // ~5 seconds LLM response time
+    let llm_cost = compute_llm_cost(llm_tokens_est, cost_config)
+        + compute_attention_cost(0, llm_delay_ms, risk, cost_config)
+        + compute_risk_cost(risk, cost_config);
+
+    // 2. Try synonym (cheapest — zero LLM cost)
+    if let Some(script_id) = synonym_script_id {
+        let script_attention = compute_attention_cost(200, 0, risk, cost_config); // ~200ms exec
+        let script_risk = compute_risk_cost(risk, cost_config);
+        let script_cost = script_attention + script_risk;
+        let savings = llm_cost - script_cost;
+        return RouteAdvice {
+            decision: RouteDecision::Script(script_id.to_string()),
+            reason: if savings > 0.001 {
+                format!("synonym route, saves ${:.4}", savings)
+            } else {
+                "synonym route (learned)".to_string()
+            },
+            estimated_llm_cost: llm_cost,
+            estimated_script_cost: script_cost,
+        };
+    }
+
+    // 3. Check predictor confidence for known scripts
+    if let (Some(pred), Some(script_id)) = (predictor, known_script_id) {
+        if let Some((_, confidence)) = pred.predict(request) {
+            let script_attention = compute_attention_cost(200, 0, risk, cost_config);
+            let script_risk = compute_risk_cost(risk, cost_config);
+            let script_cost = script_attention + script_risk;
+            let savings = llm_cost - script_cost;
+
+            // Only use script if confidence > 0.7 AND it saves money OR is read-only
+            if confidence > 0.7 && (savings > 0.0 || *risk == RiskLevel::ReadOnly) {
+                return RouteAdvice {
+                    decision: RouteDecision::Script(script_id.to_string()),
+                    reason: format!(
+                        "predicted with {:.0}% confidence, saves ${:.4}",
+                        confidence * 100.0,
+                        savings
+                    ),
+                    estimated_llm_cost: llm_cost,
+                    estimated_script_cost: script_cost,
+                };
+            }
+        }
+    }
+
+    // 4. Default to LLM
+    RouteAdvice {
+        decision: RouteDecision::Llm,
+        reason: format!("LLM route (est. ${:.4})", llm_cost),
+        estimated_llm_cost: llm_cost,
+        estimated_script_cost: 0.0,
+    }
+}
+
+#[cfg(test)]
+mod phase5_tests {
+    use super::*;
+    use crate::config::{Config, CostConfig};
+    use crate::types::RiskLevel;
+
+    #[test]
+    fn test_optimize_route_synonym_preferred() {
+        let config = Config::default();
+        let advice = optimize_route(
+            "list files",
+            Some("ls_script"),
+            None,
+            &RiskLevel::ReadOnly,
+            None,
+            &config,
+        );
+        assert_eq!(
+            advice.decision,
+            RouteDecision::Script("ls_script".to_string())
+        );
+        assert!(advice.estimated_llm_cost > 0.0);
+    }
+
+    #[test]
+    fn test_optimize_route_llm_fallback() {
+        let config = Config::default();
+        let advice = optimize_route(
+            "unknown request",
+            None,
+            None,
+            &RiskLevel::ReadOnly,
+            None,
+            &config,
+        );
+        assert_eq!(advice.decision, RouteDecision::Llm);
+    }
+
+    #[test]
+    fn test_optimize_route_with_predictor() {
+        let config = Config::default();
+        let mut pred = BayesianPredictor::new();
+        pred.observe(&[
+            "list files".into(),
+            "show details".into(),
+            "list files".into(),
+            "show details".into(),
+        ]);
+        let advice = optimize_route(
+            "list files",
+            None,
+            Some(&pred),
+            &RiskLevel::ReadOnly,
+            Some("show_script"),
+            &config,
+        );
+        assert_eq!(
+            advice.decision,
+            RouteDecision::Script("show_script".to_string())
+        );
+        assert!(advice.reason.contains("confidence"));
+    }
+
+    #[test]
+    fn test_route_advice_fields() {
+        let advice = RouteAdvice {
+            decision: RouteDecision::Llm,
+            reason: "test".into(),
+            estimated_llm_cost: 0.05,
+            estimated_script_cost: 0.001,
+        };
+        assert_eq!(advice.decision, RouteDecision::Llm);
+        assert!(advice.estimated_llm_cost > advice.estimated_script_cost);
+    }
+}

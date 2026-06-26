@@ -186,6 +186,148 @@ User request: {redacted}
     }
 }
 
+/// Ollama provider — calls local Ollama instance via its HTTP API.
+pub struct OllamaProvider {
+    model: String,
+    base_url: String,
+}
+
+impl OllamaProvider {
+    pub fn new(config: &ProviderConfig) -> Self {
+        let model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| "llama3.2".to_string());
+        let base_url = config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+        Self { model, base_url }
+    }
+}
+
+impl Provider for OllamaProvider {
+    fn plan(&self, request: &str) -> Result<AgentPlan> {
+        let redacted = redact(request);
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+        let files = top_level_entries().unwrap_or_default().join(", ");
+        let prompt = format!(
+            r#"You are a CLI assistant. Given a user request, output a JSON plan with commands to execute.
+
+Rules:
+- Only output valid JSON, no other text.
+- risk must be one of: read_only, local_write, destructive, network_read, network_write, credential_access, financial.
+- Each command must have: command, argv (array of strings), risk, reason.
+- Prefer safe commands. Use read_only unless the task requires writing.
+
+Example:
+{{"summary": "List files in current directory", "risk": "read_only", "commands": [{{"command": "ls", "argv": ["ls", "-la"], "risk": "read_only", "reason": "List files with details"}}]}}
+
+Current working directory: {cwd}
+Top-level entries: {files}
+User request: {redacted}
+"#
+        );
+
+        // Try OpenAI-compatible endpoint first (Ollama >= 0.1.32)
+        let openai_url = format!("{}/v1/chat/completions", self.base_url);
+        let ollama_url = format!("{}/api/chat", self.base_url);
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "stream": false,
+            "temperature": 0.1,
+            "max_tokens": 1000,
+        });
+
+        // Try OpenAI-compatible path first
+        let result = ureq::post(&openai_url)
+            .header("Content-Type", "application/json")
+            .send_json(&body);
+
+        let (response_text, tokens_used): (String, Option<u64>) = match result {
+            Ok(resp) => {
+                let value: serde_json::Value = resp
+                    .into_body()
+                    .read_json()
+                    .context("failed to parse Ollama (OpenAI-compat) response")?;
+                let content = value["choices"][0]["message"]["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                let tokens = value["usage"]["total_tokens"].as_u64();
+                (content, tokens)
+            }
+            Err(_) => {
+                // Fallback to native Ollama /api/chat endpoint
+                let resp = ureq::post(&ollama_url)
+                    .header("Content-Type", "application/json")
+                    .send_json(&body)
+                    .context("Ollama API request failed (tried both /v1/chat/completions and /api/chat). Is Ollama running?")?;
+
+                let value: serde_json::Value = resp
+                    .into_body()
+                    .read_json()
+                    .context("failed to parse Ollama response")?;
+
+                let content = value["message"]["content"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Ollama response missing message.content"))?
+                    .to_string();
+                let tokens = value["eval_count"].as_u64();
+                (content, tokens)
+            }
+        };
+
+        let json_str = extract_json(&response_text)?;
+        let llm: LlmPlanResponse =
+            serde_json::from_str(json_str).context("failed to parse LLM plan JSON from Ollama")?;
+        validate_llm_plan_shape(&llm)?;
+
+        let commands = llm
+            .commands
+            .into_iter()
+            .map(|c| crate::agent::AgentCommand {
+                command: c.command,
+                argv: c.argv,
+                risk: parse_risk(&c.risk),
+                reason: c.reason,
+            })
+            .collect();
+
+        let cache_template = llm
+            .cache_template
+            .map(|template| crate::agent::AgentCacheTemplate {
+                parameters: template.parameters,
+                preconditions: template.preconditions,
+                steps: template
+                    .steps
+                    .into_iter()
+                    .map(|step| crate::agent::AgentCacheStep {
+                        command: step.command,
+                        argv: step.argv,
+                        risk: parse_risk(&step.risk),
+                        description: step.description.or(step.reason),
+                    })
+                    .collect(),
+                artifacts: template.artifacts,
+            });
+
+        Ok(AgentPlan {
+            summary: llm.summary,
+            risk: parse_risk(&llm.risk),
+            commands,
+            cache_template,
+            tokens_used,
+        })
+    }
+}
+
 fn validate_llm_plan_shape(plan: &LlmPlanResponse) -> Result<()> {
     if plan.summary.trim().is_empty() {
         anyhow::bail!("provider returned empty summary");
@@ -280,10 +422,7 @@ pub fn create_provider(config: &ProviderConfig) -> Box<dyn Provider> {
             eprintln!("warning: Anthropic provider not yet implemented, using mock");
             Box::new(MockProvider)
         }
-        crate::config::ProviderType::Ollama => {
-            eprintln!("warning: Ollama provider not yet implemented, using mock");
-            Box::new(MockProvider)
-        }
+        crate::config::ProviderType::Ollama => Box::new(OllamaProvider::new(config)),
         crate::config::ProviderType::Mock => Box::new(MockProvider),
     }
 }

@@ -129,6 +129,9 @@ pub enum Command {
 
     /// Отчёт по затратам (Phase 5)
     Cost,
+    /// Управление реестром скриптов сообщества (Phase 6)
+    #[command(subcommand)]
+    Registry(RegistryCmd),
 }
 
 #[derive(Subcommand)]
@@ -148,6 +151,18 @@ pub enum ScriptCmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Экспортировать скрипт(ы) в JSON (Phase 6)
+    Export {
+        /// ID скрипта (или "all" для всех)
+        id: String,
+        /// Путь для сохранения (по умолчанию stdout)
+        output: Option<String>,
+    },
+    /// Импортировать скрипт(ы) из JSON (Phase 6)
+    Import {
+        /// Путь к JSON-файлу или "-" для stdin
+        input: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -165,6 +180,28 @@ pub enum AliasCmd {
 pub enum SandboxCmd {
     /// Показать состояние песочницы
     Status,
+}
+
+#[derive(Subcommand)]
+pub enum RegistryCmd {
+    /// Поиск скриптов в реестре сообщества
+    Search {
+        /// Поисковый запрос
+        query: String,
+    },
+    /// Установить скрипт из реестра сообщества
+    Install {
+        /// ID скрипта в реестре
+        id: String,
+    },
+    /// Опубликовать скрипт в реестр сообщества
+    Publish {
+        /// ID локального скрипта
+        id: String,
+        /// API-ключ реестра (или из config)
+        #[arg(long)]
+        api_key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

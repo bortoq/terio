@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 // ---------------------------------------------------------------------------
 
 /// Источник скрипта
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ScriptSource {
     /// Исходный код на Rhai
     Rhai(String),
@@ -22,7 +22,9 @@ pub enum ScriptSource {
 
 /// Категория скрипта (определяет приоритет при разрешении конфликтов).
 /// Приоритет (по возрастанию): Builtin < Learned < Core < User.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum ScriptKind {
     /// Встроенные скрипты (низший приоритет)
     Builtin,
@@ -35,7 +37,7 @@ pub enum ScriptKind {
 }
 
 /// Зарегистрированный скрипт
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Script {
     pub id: String,
     pub triggers: Vec<String>,
@@ -640,6 +642,10 @@ impl ScriptEngine {
     /// Получить все зарегистрированные скрипты.
     pub fn scripts(&self) -> &[Script] {
         &self.scripts
+    }
+
+    pub fn find_script(&self, id: &str) -> Option<&Script> {
+        self.scripts.iter().find(|s| s.id == id)
     }
 
     /// Создать директории скриптов, если не существуют.

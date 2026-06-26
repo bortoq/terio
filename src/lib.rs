@@ -24,6 +24,7 @@ pub mod log;
 
 // Следующие фазы (заглушки)
 pub mod proactive;
+pub mod registry;
 pub mod render;
 pub mod script_engine;
 pub mod synonym;
