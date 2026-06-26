@@ -1466,6 +1466,10 @@ fn process_one_ui_command(
                 }
             }
         }
+        UiCommand::Exit => {
+            // Handled locally in app.rs, should not reach backend
+            unreachable!()
+        }
         UiCommand::Repeat => {
             let entries = store.recent(50)?;
             let last_req = entries.iter().rev().find_map(|e| e.request.clone());

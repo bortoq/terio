@@ -6,8 +6,7 @@ use dioxus::prelude::*;
 
 use super::state::{
     append_live_entry, get_entries, is_completion_entry, parse_input, refresh_entries,
-    refresh_undo_status, send_ui_command, take_live_stream, undo_summary_label, ActivityState,
-    UiCommand,
+    refresh_undo_status, send_ui_command, take_live_stream, ActivityState, UiCommand,
 };
 
 /// Запускает Dioxus-окно с переданными записями лога.
@@ -24,9 +23,13 @@ pub fn run_with_entries_and_runtime(
     // Use LaunchBuilder with explicit close behavior (Fix 4)
     #[cfg(feature = "desktop")]
     {
-        use dioxus::desktop::{Config, WindowCloseBehaviour};
+        use dioxus::desktop::{Config, WindowBuilder, WindowCloseBehaviour};
         dioxus::LaunchBuilder::new()
-            .with_cfg(Config::new().with_close_behaviour(WindowCloseBehaviour::LastWindowExitsApp))
+            .with_cfg(
+                Config::new()
+                    .with_window(WindowBuilder::new().with_decorations(false))
+                    .with_close_behaviour(WindowCloseBehaviour::LastWindowExitsApp),
+            )
             .launch(app);
     }
     #[cfg(not(feature = "desktop"))]
@@ -133,6 +136,9 @@ fn app() -> Element {
                     activity_state.set(ActivityState::Idle);
                     refresh_tick += 1;
                 }
+                UiCommand::Exit => {
+                    std::process::exit(0);
+                }
                 UiCommand::Repeat => {
                     // Repeat goes to backend (needs log access)
                     activity_state.set(ActivityState::Busy);
@@ -234,25 +240,6 @@ fn app() -> Element {
                         }
                     }
                 }
-            }
-            // Bottom bar — activity status + undo info
-            div {
-                style: "
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 11px;
-                    color: #555;
-                    padding: 2px 12px;
-                    border-top: 1px solid #222;
-                ",
-                div {
-                    style: format!(
-                        "color: {};",
-                        if activity_state() == ActivityState::Busy { "#d7ba7d" } else { "#6a9955" }
-                    ),
-                    if activity_state() == ActivityState::Busy { "●" } else { "●" }
-                }
-                div { style: "color: #555;", "{undo_summary_label(&undo_status())}" }
             }
             // Input line — always at the bottom
             div {

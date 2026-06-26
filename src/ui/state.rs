@@ -26,6 +26,7 @@ pub enum UiCommand {
     Repeat,
     Help,
     Mode(String), // "quiet" | "normal" | "debug"
+    Exit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -124,6 +125,7 @@ pub fn parse_input(input: &str) -> UiCommand {
         return UiCommand::Ask(String::new());
     }
     match trimmed {
+        "exit" | "quit" => return UiCommand::Exit,
         "help" => return UiCommand::Help,
         "repeat" => return UiCommand::Repeat,
         "undo" => return UiCommand::Undo,
@@ -276,6 +278,12 @@ mod tests {
     fn test_parse_input_confirm_n() {
         assert!(matches!(parse_input("n"), UiCommand::Ask(_)));
         assert!(matches!(parse_input("confirm n"), UiCommand::Ask(_)));
+    }
+
+    #[test]
+    fn test_parse_input_exit() {
+        assert!(matches!(parse_input("exit"), UiCommand::Exit));
+        assert!(matches!(parse_input("quit"), UiCommand::Exit));
     }
 
     #[test]
