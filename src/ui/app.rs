@@ -46,6 +46,9 @@ fn app() -> Element {
     let mut undo_status = use_signal(refresh_undo_status);
     let mut activity_state = use_signal(|| ActivityState::Idle);
 
+    // Fix 1: store input element for reliable autofocus and click-to-refocus
+    let mut input_data = use_signal(|| None::<std::rc::Rc<MountedData>>);
+
     // FocusOut persistence: храним индекс фокуса между рендерами
     let mut focus_signal = use_signal(|| None::<usize>);
     let mut prev_entry_count = use_signal(|| 0_usize);
@@ -185,6 +188,11 @@ fn app() -> Element {
 
     rsx! {
         div {
+            onclick: move |_| {
+                if let Some(ref data) = *input_data.read() {
+                    drop(data.set_focus(true));
+                }
+            },
             style: "
                 display: flex;
                 flex-direction: column;
@@ -258,8 +266,12 @@ fn app() -> Element {
                         caret-color: #d4d4d4;
                     ",
                     placeholder: "введите команду...",
+                    onmounted: move |evt| {
+                        let data = evt.data();
+                        drop(data.set_focus(true));
+                        input_data.set(Some(data));
+                    },
                     value: "{input_text}",
-                    autofocus: "true",
                     oninput: move |evt: Event<FormData>| input_text.set(evt.value().clone()),
                     onkeydown: move |evt: Event<KeyboardData>| {
                         if evt.key() == dioxus::events::Key::Enter {
