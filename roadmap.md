@@ -3,7 +3,25 @@
 Каждая фаза — список конкретных вещей, которые надо сделать.
 Сделано → `[x]` → все `[x]` → фаза готова.
 
+
+
+## Фаза 7. Событийная модель лога (LogEvent)
+
+**Цель:** перевести лог из плоского списка `LogEntry` в структурированную последовательность событий,
+где каждое событие — пара (UserPrediction, TerioPrediction). Упрощает итерацию, метрики, undo,
+cost-отчёты и проактивный движок. Совместимость с существующим JSONL-форматом — полная.
+
+- [ ] Определить `LogEvent { user_action: UserPrediction, terio_action: TerioPrediction }`
+- [ ] Написать группировщик: связывает Ask → ответ в пару по `interaction_id`
+- [ ] `LogReader` возвращает `Vec<LogEvent>` (внутри группирует старые `LogEntry`)
+- [ ] `WindowManager::from_log` принимает `&[LogEvent]`
+- [ ] Перевести `process_one_ui_command`, undo, repeat, cost report, proactive engine на `LogEvent`
+- [ ] JSONL-формат хранения НЕ меняется (обратная совместимость)
+- [ ] Обновить архитектурную документацию
+
+
 ---
+
 
 > **Важно:** этот roadmap описывает **новый target direction** после pivot `8acb1fa`.
 > Текущий код содержит прежний baseline (ask/confirm/undo/integrations/multi-view Dioxus UI),
