@@ -1292,6 +1292,7 @@ fn print_log_plain(entries: &[terio::types::LogEntry]) {
 fn launch_ui() {
     use std::sync::mpsc;
 
+    // Redirect stderr to log file to suppress GTK/WebKit terminal noise (Fix 2)
     let log_dir = match JsonlLogWriter::default_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -1299,6 +1300,24 @@ fn launch_ui() {
             std::process::exit(1);
         }
     };
+    let ui_log = log_dir.join("ui.log");
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::IntoRawFd;
+        extern "C" {
+            fn dup2(oldfd: i32, newfd: i32) -> i32;
+        }
+        if let Ok(f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&ui_log)
+        {
+            let fd = f.into_raw_fd();
+            unsafe {
+                dup2(fd, 2);
+            }
+        }
+    }
 
     let store = LogStore::new(
         Box::new(JsonlLogWriter::new(&log_dir).unwrap_or_else(|e| {

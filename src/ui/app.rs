@@ -21,6 +21,15 @@ pub fn run_with_entries_and_runtime(
     sender: Option<std::sync::mpsc::Sender<UiCommand>>,
 ) {
     super::state::init_globals(entries, stream, sender);
+    // Use LaunchBuilder with explicit close behavior (Fix 4)
+    #[cfg(feature = "desktop")]
+    {
+        use dioxus::desktop::{Config, WindowCloseBehaviour};
+        dioxus::LaunchBuilder::new()
+            .with_cfg(Config::new().with_close_behaviour(WindowCloseBehaviour::LastWindowExitsApp))
+            .launch(app);
+    }
+    #[cfg(not(feature = "desktop"))]
     dioxus::launch(app);
 }
 
@@ -250,6 +259,7 @@ fn app() -> Element {
                     ",
                     placeholder: "введите команду...",
                     value: "{input_text}",
+                    autofocus: "true",
                     oninput: move |evt: Event<FormData>| input_text.set(evt.value().clone()),
                     onkeydown: move |evt: Event<KeyboardData>| {
                         if evt.key() == dioxus::events::Key::Enter {
