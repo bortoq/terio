@@ -28,7 +28,11 @@ pub fn run_with_entries_and_runtime(
             .with_cfg(
                 Config::new()
                     .with_window(WindowBuilder::new().with_decorations(false))
-                    .with_close_behaviour(WindowCloseBehaviour::LastWindowExitsApp),
+                    .with_close_behaviour(WindowCloseBehaviour::LastWindowExitsApp)
+                    .with_background_color((0, 0, 0, 255))
+                    .with_custom_head(
+                        r"<style>html,body{margin:0;padding:0;overflow:hidden;background:#000;width:100%;height:100%;}</style>".to_string(),
+                    ),
             )
             .launch(app);
     }
@@ -213,6 +217,8 @@ fn app() -> Element {
                 display: flex;
                 flex-direction: column;
                 height: 100vh;
+                width: 100vw;
+                overflow: hidden;
                 font-family: 'Courier New', 'Consolas', monospace;
                 background: #000000;
                 color: #d4d4d4;
