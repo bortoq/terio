@@ -23,8 +23,10 @@ pub mod config;
 pub mod log;
 
 // Следующие фазы (заглушки)
+pub mod proactive;
 pub mod render;
 pub mod script_engine;
+pub mod synonym;
 pub mod trust;
 
 #[cfg(test)]

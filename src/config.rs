@@ -146,6 +146,61 @@ impl Default for AutoTrustConfig {
     }
 }
 
+/// Настройки стоимости (Phase 5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostConfig {
+    /// Цена за 1000 токенов (в $).
+    #[serde(default = "default_token_price")]
+    pub token_price_per_1k: f64,
+    /// Стоимость секунды внимания пользователя (в $).
+    #[serde(default = "default_attention_cost")]
+    pub attention_cost_per_sec: f64,
+    /// Веса риска для C_risk.
+    #[serde(default)]
+    pub risk_weights: std::collections::HashMap<String, f64>,
+}
+
+fn default_token_price() -> f64 {
+    0.01
+}
+fn default_attention_cost() -> f64 {
+    0.001
+}
+
+impl Default for CostConfig {
+    fn default() -> Self {
+        let mut weights = std::collections::HashMap::new();
+        weights.insert("read_only".to_string(), 0.0);
+        weights.insert("local_write".to_string(), 1.0);
+        weights.insert("network_read".to_string(), 0.5);
+        weights.insert("network_write".to_string(), 5.0);
+        weights.insert("credential_access".to_string(), 8.0);
+        weights.insert("financial".to_string(), 10.0);
+        weights.insert("destructive".to_string(), 10.0);
+        Self {
+            token_price_per_1k: 0.01,
+            attention_cost_per_sec: 0.001,
+            risk_weights: weights,
+        }
+    }
+}
+
+impl CostConfig {
+    /// Вес риска для данного уровня (используется в C_risk).
+    pub fn risk_cost_weight(&self, risk: &crate::types::RiskLevel) -> f64 {
+        let key = match risk {
+            crate::types::RiskLevel::ReadOnly => "read_only",
+            crate::types::RiskLevel::LocalWrite => "local_write",
+            crate::types::RiskLevel::NetworkRead => "network_read",
+            crate::types::RiskLevel::NetworkWrite => "network_write",
+            crate::types::RiskLevel::CredentialAccess => "credential_access",
+            crate::types::RiskLevel::Financial => "financial",
+            crate::types::RiskLevel::Destructive => "destructive",
+        };
+        self.risk_weights.get(key).copied().unwrap_or(0.0)
+    }
+}
+
 /// Top-level config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -172,6 +227,9 @@ pub struct Config {
     /// Пороги автодоверия (Phase 1)
     #[serde(default)]
     pub auto_trust: AutoTrustConfig,
+    /// Настройки стоимости (Phase 5)
+    #[serde(default)]
+    pub cost: CostConfig,
 }
 
 impl Config {

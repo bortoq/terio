@@ -4,12 +4,13 @@ use clap::Parser;
 use std::sync::Arc;
 use terio::ask::{self, AskResult};
 use terio::cache::ScriptCache;
-use terio::cli::{Cli, Command, ConfigCmd, SandboxCmd, ScriptCmd};
+use terio::cli::{AliasCmd, Cli, Command, ConfigCmd, SandboxCmd, ScriptCmd};
 use terio::config::Config;
 use terio::identity::Identity;
 use terio::log::reader::JsonlLogReader;
 use terio::log::writer::JsonlLogWriter;
 use terio::log::{LogReader, LogStore};
+use terio::proactive::ProactiveEngine;
 use terio::provider::create_provider;
 use terio::run;
 use terio::script_engine::{self, CliApiBackend, ScriptEngine};
@@ -37,7 +38,15 @@ fn main() -> anyhow::Result<()> {
 
         Some(Command::Ask { request, yes }) => {
             if !yes {
-                if let Some(true) = try_script_command(&request)? {
+                // 1) Check synonym index first (learned from past LLM success)
+                if let Some(entry) = try_synonym_command(&request)? {
+                    if entry {
+                        // handled by synonym
+                    } else {
+                        handle_ask(&identity, &log_dir, &request, yes)?;
+                    }
+                // 2) Check ScriptEngine
+                } else if let Some(true) = try_script_command(&request)? {
                     // handled by script
                 } else {
                     handle_ask(&identity, &log_dir, &request, yes)?;
@@ -126,6 +135,11 @@ fn main() -> anyhow::Result<()> {
             handle_script(cmd)?;
         }
 
+        // --- Phase 3: Synonym commands ---
+        Some(Command::Alias(cmd)) => {
+            handle_alias(cmd)?;
+        }
+
         // --- Phase 0: Terminal commands (routed through ScriptEngine) ---
         Some(Command::Help) => {
             if let Some(true) = try_script_command("help")? {
@@ -170,6 +184,11 @@ fn main() -> anyhow::Result<()> {
 
         Some(Command::Sandbox(cmd)) => {
             handle_sandbox(cmd)?;
+        }
+
+        // --- Phase 5: Cost report ---
+        Some(Command::Cost) => {
+            handle_cost(&log_dir)?;
         }
     }
 
@@ -259,6 +278,79 @@ fn handle_run(
     std::process::exit(result.exit_code);
 }
 
+fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
+    let reader = JsonlLogReader::new(log_dir);
+    let entries = reader.recent(usize::MAX)?;
+    let config = Config::load().unwrap_or_default();
+
+    // Извлекаем cost_counters из записей с request
+    let mut total_tokens: u64 = 0;
+    let mut total_llm_duration: u64 = 0;
+    let mut total_exec_duration: u64 = 0;
+    let mut total_commands: u64 = 0;
+    let mut count_requests: u64 = 0;
+    let mut cache_hits: u64 = 0;
+    let mut cache_misses: u64 = 0;
+
+    for entry in &entries {
+        let counters = &entry.cost_counters;
+        total_tokens += counters.llm_cost.tokens;
+        total_llm_duration += counters.llm_cost.duration_ms;
+        total_exec_duration += counters.execution_cost.duration_ms;
+        total_commands += counters.execution_cost.commands_executed;
+        if counters.cache_cost.hit {
+            cache_hits += 1;
+        } else {
+            cache_misses += 1;
+        }
+        if entry.request.is_some() {
+            count_requests += 1;
+        }
+    }
+
+    let cost = terio::accounting::compute_total_cost(
+        &terio::types::CostCounters {
+            llm_cost: terio::types::LlmCost {
+                tokens: total_tokens,
+                duration_ms: total_llm_duration,
+            },
+            execution_cost: terio::types::ExecutionCost {
+                duration_ms: total_exec_duration,
+                commands_executed: total_commands,
+                ..Default::default()
+            },
+            cache_cost: terio::types::CacheCost {
+                lookup_ms: 0,
+                hit: false,
+            },
+            ..Default::default()
+        },
+        &terio::types::RiskLevel::ReadOnly,
+        total_llm_duration,
+        &config.cost,
+    );
+
+    println!("=== terio cost report ===");
+    println!("Requests:              {}", count_requests);
+    println!("LLM tokens:            {}", total_tokens);
+    println!("LLM duration (ms):     {}", total_llm_duration);
+    println!("Exec duration (ms):    {}", total_exec_duration);
+    println!("Commands run:          {}", total_commands);
+    println!("Cache hits:            {}", cache_hits);
+    println!("Cache misses:          {}", cache_misses);
+    println!("{}", cost.format());
+    println!();
+    println!("Estimated savings from scripting:");
+    if let Ok(synonyms) = terio::synonym::SynonymIndex::load_default() {
+        for (query, entry) in synonyms.entries() {
+            let savings =
+                terio::accounting::estimated_savings(query, &entry.script_id, &config.cost);
+            println!("  '{}' -> ${:.6}", query, savings);
+        }
+    }
+    Ok(())
+}
+
 fn handle_ask(
     identity: &Identity,
     log_dir: &std::path::Path,
@@ -271,12 +363,50 @@ fn handle_ask(
     let reader = Box::new(JsonlLogReader::new(log_dir));
     let store = LogStore::new(writer, reader, 256);
     let provider = create_provider(&config.provider);
-    render_ask_result(
-        ask::process_request(request, identity, &store, &cache, &*provider, yes)?,
-        &store,
-        request,
-    )?;
+    let result = ask::process_request(request, identity, &store, &cache, &*provider, yes)?;
+    // Record synonym from successful LLM response (CacheHit or FromAgent)
+    if matches!(
+        result,
+        AskResult::CacheHit { .. } | AskResult::FromAgent { .. }
+    ) {
+        let script_id = match &result {
+            AskResult::CacheHit { entry, .. } => Some(entry.normalized_request.clone()),
+            AskResult::FromAgent { plan, .. } => Some(plan.summary.clone()),
+            _ => None,
+        };
+        if let Some(id) = script_id {
+            if let Ok(mut synonyms) = terio::synonym::SynonymIndex::load_default() {
+                synonyms.add(request, &id);
+                let _ = synonyms.save();
+            }
+        }
+    }
+    render_ask_result(result, &store, request)?;
     store.flush()?;
+
+    // Phase 4: Proactive prediction
+    ProactiveEngine::record_last_request(request)?;
+    if let Ok(engine) = ProactiveEngine::load_from_log(log_dir, 200) {
+        if let Some(pred) = engine.predict(request) {
+            let quiet_mode = config.attention_mode == terio::config::AttentionMode::Quiet;
+            if quiet_mode && pred.confidence > 0.95 {
+                // Silent auto-execution for high-confidence predictions in quiet mode
+                let new_count = ProactiveEngine::increment_auto_executed()?;
+                // Re-run the predicted request
+                let _ = handle_ask(identity, log_dir, &pred.request, true);
+                eprintln!("terio: +{} auto-executed ('{}')", new_count, pred.request);
+            } else if pred.confidence > 0.5 {
+                // Show suggestion
+                eprintln!("# terio: {}? [наберите команду]", pred.request);
+                ProactiveEngine::save_prediction(&pred)?;
+            }
+        }
+        let count = engine.auto_executed_count();
+        if count > 0 {
+            eprintln!("terio: +{} command(s) auto-executed this session", count);
+        }
+    }
+
     Ok(())
 }
 
@@ -485,6 +615,77 @@ fn handle_repeat(identity: &Identity, log_dir: &std::path::Path) -> anyhow::Resu
         }
         None => {
             eprintln!("terio: нет предыдущих запросов для повторения.");
+        }
+    }
+    Ok(())
+}
+
+/// Проверить синоним: если запрос найден в SynonymIndex, выполнить скрипт.
+/// Returns Some(true) если синоним сработал, Some(false) если индекс не загрузился, None если нет совпадения.
+fn try_synonym_command(query: &str) -> anyhow::Result<Option<bool>> {
+    let synonyms = match terio::synonym::SynonymIndex::load_default() {
+        Ok(s) => s,
+        Err(_) => return Ok(Some(false)),
+    };
+    match synonyms.lookup(query) {
+        Some(entry) => {
+            // Found a synonym — try running the script
+            let dirs = script_engine::default_script_dirs()?;
+            let backend = std::sync::Arc::new(CliApiBackend);
+            let mut engine = ScriptEngine::new(backend);
+            if engine.load_all(&dirs).is_err() {
+                return Ok(Some(false));
+            }
+            match engine.run_script_by_id(&entry.script_id, vec![]) {
+                Ok(output) => {
+                    if !output.is_empty() {
+                        println!("{output}");
+                    }
+                    // Update frequency
+                    if let Ok(mut syn) = terio::synonym::SynonymIndex::load_default() {
+                        syn.add(query, &entry.script_id);
+                        let _ = syn.save();
+                    }
+                    Ok(Some(true))
+                }
+                Err(_) => Ok(Some(false)),
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn handle_alias(cmd: AliasCmd) -> anyhow::Result<()> {
+    match cmd {
+        AliasCmd::List => {
+            let synonyms = terio::synonym::SynonymIndex::load_default()?;
+            if synonyms.is_empty() {
+                println!("(синонимов нет)");
+            } else {
+                println!("=== terio aliases ===");
+                let header = format!(
+                    "{:40} {:30} {:>8} {}",
+                    "Normalized", "Script ID", "Freq", "Last used"
+                );
+                println!("{header}");
+                println!("{}", "-".repeat(95));
+                for (norm, entry) in synonyms.entries() {
+                    let last = &entry.last_used[..19.min(entry.last_used.len())];
+                    println!(
+                        "{:40} {:30} {:>8} {}",
+                        norm, entry.script_id, entry.frequency, last
+                    );
+                }
+            }
+        }
+        AliasCmd::Remove { query } => {
+            let mut synonyms = terio::synonym::SynonymIndex::load_default()?;
+            if synonyms.remove(&query) {
+                synonyms.save()?;
+                eprintln!("terio: синоним '{}' удалён.", query);
+            } else {
+                eprintln!("terio: синоним '{}' не найден.", query);
+            }
         }
     }
     Ok(())

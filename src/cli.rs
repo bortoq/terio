@@ -119,9 +119,16 @@ pub enum Command {
     #[command(subcommand)]
     Script(ScriptCmd),
 
+    /// Управление синонимами (Phase 3)
+    #[command(subcommand)]
+    Alias(AliasCmd),
+
     /// Управление песочницей (Phase 1)
     #[command(subcommand)]
     Sandbox(SandboxCmd),
+
+    /// Отчёт по затратам (Phase 5)
+    Cost,
 }
 
 #[derive(Subcommand)]
@@ -140,6 +147,17 @@ pub enum ScriptCmd {
         /// Аргументы скрипта (после --)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AliasCmd {
+    /// Показать список синонимов
+    List,
+    /// Удалить синоним
+    Remove {
+        /// Запрос для удаления
+        query: String,
     },
 }
 

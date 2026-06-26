@@ -110,7 +110,11 @@ pub fn process_request(
         if !evaluation.scope_ok || !evaluation.path_boundary_ok {
             return Ok(AskResult::Declined);
         }
-        if !skip_confirm && evaluation.requires_confirmation {
+        // Quiet mode: auto-confirm low-risk (ReadOnly/NetworkRead) without asking.
+        let quiet_auto_confirm =
+            matches!(config.attention_mode, crate::config::AttentionMode::Quiet)
+                && matches!(entry.risk, RiskLevel::ReadOnly | RiskLevel::NetworkRead);
+        if !skip_confirm && evaluation.requires_confirmation && !quiet_auto_confirm {
             return Ok(AskResult::PendingConfirmation {
                 source: PendingSource::Cache,
                 plan_hash: execution_hash_for_cache(&entry),
@@ -193,7 +197,11 @@ pub fn process_request(
     let requires_confirmation = needs_confirmation(&plan)
         || matches!(plan.risk, RiskLevel::LocalWrite)
         || has_unknown_commands;
-    if has_unknown_commands || (!skip_confirm && requires_confirmation) {
+    // Quiet mode: auto-confirm low-risk (ReadOnly/NetworkRead) for known commands
+    let quiet_auto_confirm = matches!(config.attention_mode, crate::config::AttentionMode::Quiet)
+        && matches!(plan.risk, RiskLevel::ReadOnly | RiskLevel::NetworkRead)
+        && !has_unknown_commands;
+    if has_unknown_commands || (!skip_confirm && requires_confirmation && !quiet_auto_confirm) {
         return Ok(AskResult::PendingConfirmation {
             source: PendingSource::Agent,
             plan_hash: execution_hash_for_plan(request, &plan),

@@ -115,6 +115,8 @@ impl ScriptCache {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
+        let trust_threshold = Self::compute_trust_threshold(&risk);
+
         let entry = CacheEntry {
             schema_version: 1,
             script_id,
@@ -132,7 +134,7 @@ impl ScriptCache {
             steps,
             artifacts,
             success_count: 1,
-            trust_threshold: 3,
+            trust_threshold,
             created_at: now.clone(),
             last_used_at: now,
         };
@@ -143,6 +145,17 @@ impl ScriptCache {
             .with_context(|| format!("failed to write cache entry: {}", path.display()))?;
 
         Ok(entry)
+    }
+
+    /// Вычислить порог доверия по уровню риска (читает auto_trust из конфига).
+    fn compute_trust_threshold(risk: &RiskLevel) -> u32 {
+        let config = crate::config::Config::load().unwrap_or_default();
+        match risk {
+            RiskLevel::ReadOnly | RiskLevel::NetworkRead => config.auto_trust.read_only,
+            RiskLevel::LocalWrite => config.auto_trust.local_write,
+            // Destructive, NetworkWrite, Credential — never auto-trust
+            _ => u32::MAX,
+        }
     }
 
     /// Обновляет success_count после успешного выполнения из кеша.
