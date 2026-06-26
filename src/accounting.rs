@@ -499,7 +499,7 @@ pub fn optimize_route(
 #[cfg(test)]
 mod phase5_tests {
     use super::*;
-    use crate::config::{Config, CostConfig};
+    use crate::config::Config;
     use crate::types::RiskLevel;
 
     #[test]

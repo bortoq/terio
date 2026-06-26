@@ -289,7 +289,8 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     let entries = reader.recent(usize::MAX)?;
     let config = Config::load().unwrap_or_default();
 
-    // Per-entry cost computation with risk awareness
+    // Per-entry complete cost computation
+    let mut total_entries: u64 = 0;
     let mut total_tokens: u64 = 0;
     let mut total_llm_duration: u64 = 0;
     let mut total_exec_duration: u64 = 0;
@@ -297,7 +298,7 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     let mut count_requests: u64 = 0;
     let mut cache_hits: u64 = 0;
     let mut cache_misses: u64 = 0;
-    let mut total_risk_cost: f64 = 0.0;
+    let mut per_entry_breakdowns: Vec<terio::accounting::CostBreakdown> = Vec::new();
 
     for entry in &entries {
         let counters = &entry.cost_counters;
@@ -313,35 +314,35 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
         if entry.request.is_some() {
             count_requests += 1;
         }
-        // Per-entry risk cost
-        if let Some(ref risk) = entry.risk {
-            total_risk_cost += terio::accounting::compute_risk_cost(risk, &config.cost);
-        }
+        // Per-entry complete cost: compute per-entry instead of mixing global + per-entry risk
+        let entry_risk = entry
+            .risk
+            .as_ref()
+            .unwrap_or(&terio::types::RiskLevel::ReadOnly);
+        let entry_cost = terio::accounting::compute_total_cost(
+            counters,
+            entry_risk,
+            counters.llm_cost.duration_ms,
+            &config.cost,
+        );
+        per_entry_breakdowns.push(entry_cost);
+        total_entries += 1;
     }
 
-    let cost = terio::accounting::compute_total_cost(
-        &terio::types::CostCounters {
-            llm_cost: terio::types::LlmCost {
-                tokens: total_tokens,
-                duration_ms: total_llm_duration,
-            },
-            execution_cost: terio::types::ExecutionCost {
-                duration_ms: total_exec_duration,
-                commands_executed: total_commands,
-                ..Default::default()
-            },
-            cache_cost: terio::types::CacheCost {
-                lookup_ms: 0,
-                hit: false,
-            },
-            ..Default::default()
-        },
-        &terio::types::RiskLevel::ReadOnly,
-        total_llm_duration,
-        &config.cost,
-    );
+    // Aggregate per-entry costs
+    let mut total_llm = 0.0;
+    let mut total_attention = 0.0;
+    let mut total_risk = 0.0;
+    let mut total_all = 0.0;
+    for b in &per_entry_breakdowns {
+        total_llm += b.llm_cost;
+        total_attention += b.attention_cost;
+        total_risk += b.risk_cost;
+        total_all += b.total;
+    }
 
     println!("=== terio cost report ===");
+    println!("Total entries:         {}", total_entries);
     println!("Requests:              {}", count_requests);
     println!("LLM tokens:            {}", total_tokens);
     println!("LLM duration (ms):     {}", total_llm_duration);
@@ -349,12 +350,11 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     println!("Commands run:          {}", total_commands);
     println!("Cache hits:            {}", cache_hits);
     println!("Cache misses:          {}", cache_misses);
-    println!("{}", cost.format());
-    println!("  Risk (per-entry):     ${:.6}", total_risk_cost);
-    println!(
-        "  Combined C_total:     ${:.6}",
-        cost.total + total_risk_cost
-    );
+    println!("  LLM tokens:           ${:.6}", total_llm);
+    println!("  Attention:            ${:.6}", total_attention);
+    println!("  Risk:                 ${:.6}", total_risk);
+    println!("  ─────────────────");
+    println!("  Total C_total:        ${:.6}", total_all);
     println!();
     println!("Estimated savings from scripting:");
     if let Ok(synonyms) = terio::synonym::SynonymIndex::load_default() {
@@ -392,15 +392,51 @@ fn handle_registry(cmd: RegistryCmd) -> anyhow::Result<()> {
                 );
             }
         }
-        RegistryCmd::Install { id } => match terio::registry::download_and_install(&id) {
-            Ok(path) => {
-                eprintln!("terio: script '{}' installed from registry", id);
-                eprintln!("terio:   -> {}", path);
+        RegistryCmd::Install { id } => {
+            // Confirm before installing
+            match terio::registry::inspect_script(&id) {
+                Ok(meta) => {
+                    let caps = if meta.capabilities.is_empty() {
+                        "none".to_string()
+                    } else {
+                        meta.capabilities.join(", ")
+                    };
+                    eprintln!("terio: installing '{}' from registry:", meta.id);
+                    eprintln!("  Description: {}", meta.description);
+                    eprintln!(
+                        "  Author:      {}",
+                        meta.author.as_deref().unwrap_or("unknown")
+                    );
+                    eprintln!("  Risk:        {}", meta.risk);
+                    eprintln!("  Capabilities: {}", caps);
+                    eprint!("Proceed? [y/N] ");
+                    use std::io::Read;
+                    let mut input = String::new();
+                    std::io::stdin().read_to_string(&mut input)?;
+                    if !input.trim().eq_ignore_ascii_case("y") {
+                        eprintln!("terio: installation cancelled.");
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("terio: {} — can't install", e);
+                    return Ok(());
+                }
             }
-            Err(e) => {
-                eprintln!("terio: failed to install '{}': {}", id, e);
+            match terio::registry::download_and_install(
+                &id,
+                false,
+                None::<&terio::registry::ConfirmCallback>,
+            ) {
+                Ok(path) => {
+                    eprintln!("terio: script '{}' installed from registry", id);
+                    eprintln!("terio:   -> {}", path);
+                }
+                Err(e) => {
+                    eprintln!("terio: failed to install '{}': {}", id, e);
+                }
             }
-        },
+        }
         RegistryCmd::Publish { id, api_key } => {
             // Load the script from local filesystem
             let dirs = script_engine::default_script_dirs()?;
@@ -425,6 +461,9 @@ fn handle_registry(cmd: RegistryCmd) -> anyhow::Result<()> {
                 " (no API key — dry run)"
             };
 
+            // Build capabilities from script triggers + risk heuristic
+            let capabilities: Vec<String> = vec![]; // TODO: derive from script analysis
+
             let meta = terio::registry::prepare_publish(
                 &script.id,
                 &content,
@@ -433,6 +472,7 @@ fn handle_registry(cmd: RegistryCmd) -> anyhow::Result<()> {
                 script.triggers.clone(),
                 None,
                 None,
+                capabilities,
             )?;
 
             println!("=== terio publish preview ===");
@@ -448,6 +488,33 @@ fn handle_registry(cmd: RegistryCmd) -> anyhow::Result<()> {
             println!("{}", key_info);
             eprintln!("terio: publish preview generated. Use --api-key to submit.");
         }
+        RegistryCmd::Inspect { id } => match terio::registry::inspect_script(&id) {
+            Ok(meta) => {
+                let caps = if meta.capabilities.is_empty() {
+                    "none".to_string()
+                } else {
+                    meta.capabilities.join(", ")
+                };
+                println!("=== terio registry: {} ===", meta.id);
+                println!("  Name:        {}", meta.name);
+                println!("  Description: {}", meta.description);
+                println!(
+                    "  Author:      {}",
+                    meta.author.as_deref().unwrap_or("unknown")
+                );
+                println!("  Version:     {}", meta.version);
+                println!("  Risk:        {}", meta.risk);
+                println!("  Capabilities: {}", caps);
+                println!("  Tags:        {}", meta.tags.join(", "));
+                println!(
+                    "  SHA-256:     {}",
+                    meta.sha256.as_deref().unwrap_or("(none)")
+                );
+            }
+            Err(e) => {
+                eprintln!("terio: {}", e);
+            }
+        },
     }
     Ok(())
 }
@@ -460,6 +527,49 @@ fn handle_ask(
 ) -> anyhow::Result<()> {
     let config = Config::load().unwrap_or_default();
     let cache = ScriptCache::new()?;
+
+    // Phase 5: Route optimizer — log decision in debug mode
+    if config.attention_mode == terio::config::AttentionMode::Debug {
+        // Check if there's a synonym for this request
+        let synonym_id = terio::synonym::SynonymIndex::load_default()
+            .ok()
+            .and_then(|s| {
+                // Clone out of borrowed context before s is dropped
+                s.lookup(request).map(|r| r.entry.script_id.clone())
+            });
+
+        // Check if there's a matching script
+        let script_id = {
+            if let Ok(dirs) = script_engine::default_script_dirs() {
+                let backend = Arc::new(CliApiBackend);
+                let mut engine = ScriptEngine::new(backend);
+                if engine.load_all(&dirs).is_ok() {
+                    engine.match_input(request).map(|(s, _)| s.id.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        let advice = terio::accounting::optimize_route(
+            request,
+            synonym_id.as_deref(),
+            None,
+            &terio::types::RiskLevel::ReadOnly,
+            script_id.as_deref(),
+            &config,
+        );
+        eprintln!(
+            "[route] {} ({})",
+            advice.reason,
+            match &advice.decision {
+                terio::accounting::RouteDecision::Script(id) => format!("script:{}", id),
+                terio::accounting::RouteDecision::Llm => "LLM".to_string(),
+            }
+        );
+    }
     let writer = Box::new(JsonlLogWriter::new(log_dir)?);
     let reader = Box::new(JsonlLogReader::new(log_dir));
     let store = LogStore::new(writer, reader, 256);

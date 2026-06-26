@@ -202,6 +202,11 @@ pub enum RegistryCmd {
         #[arg(long)]
         api_key: Option<String>,
     },
+    /// Показать метаданные скрипта из реестра (без установки)
+    Inspect {
+        /// ID скрипта в реестре
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]

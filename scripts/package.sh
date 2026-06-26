@@ -63,17 +63,15 @@ Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
 Maintainer: terio team <terio@bortoq.com>
+Depends: libgtk-3-0, libwebkit2gtk-4.1-0, libc6
 Description: Terminal LLM integrator with script cache and sandbox
  terio is a terminal-based interface integrator that uses LLM
  under the hood, script cache and sandbox, and returns output
  as windows — from text to video.
 CONTROL
 
-    # Completion stubs
-    ${BINARY} help 2>/dev/null | grep -q "COMMAND" && {
-        ${BINARY} completion bash > "${DEB_DIR}/usr/share/bash-completion/completions/terio" 2>/dev/null || true
-        ${BINARY} completion zsh > "${DEB_DIR}/usr/share/zsh/vendor-completions/_terio" 2>/dev/null || true
-    }
+    # Completion files (placeholder for future `terio completion` command)
+    # See https://github.com/bortoq/terio/issues/XX
 
     dpkg-deb --build "${DEB_DIR}" "${OUTDIR}/terio_${VERSION}_${DEB_ARCH}.deb"
     rm -rf "${DEB_DIR}"
