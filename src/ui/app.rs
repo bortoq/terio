@@ -156,18 +156,28 @@ fn app() -> Element {
     let mut mgr = WindowManager::from_log(&entries);
 
     // Restore focus: если entry_count не изменился, храним фокус; если изменился — сброс в конец
+    let mut restore_focus = None::<usize>;
     if entry_count == *prev_entry_count.read() {
         if let Some(focus) = *focus_signal.read() {
             if focus < mgr.windows.len() {
-                mgr.focus_out = Some(focus);
+                restore_focus = Some(focus);
             }
         }
-    } else {
-        // Новые записи — фокус на последнее окно (from_log default)
-        focus_signal.set(mgr.focus_out);
     }
-    prev_entry_count.set(entry_count);
-    focus_signal.set(mgr.focus_out);
+    if let Some(f) = restore_focus {
+        mgr.focus_out = Some(f);
+    }
+
+    // Offload signal writes + input refocus to use_effect (fixes Dioxus warning + DOM loss of focus)
+    let saved_focus = mgr.focus_out;
+    let saved_entry_count = entry_count;
+    use_effect(move || {
+        prev_entry_count.set(saved_entry_count);
+        focus_signal.set(saved_focus);
+        if let Some(ref data) = *input_data.read() {
+            drop(data.set_focus(true));
+        }
+    });
 
     // Добавляем окно-подтверждение, если есть pending confirmation
     let mut windows = mgr.windows.clone();
@@ -267,9 +277,7 @@ fn app() -> Element {
                     ",
                     placeholder: "введите команду...",
                     onmounted: move |evt| {
-                        let data = evt.data();
-                        drop(data.set_focus(true));
-                        input_data.set(Some(data));
+                        input_data.set(Some(evt.data()));
                     },
                     value: "{input_text}",
                     oninput: move |evt: Event<FormData>| input_text.set(evt.value().clone()),
