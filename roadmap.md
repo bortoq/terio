@@ -173,8 +173,15 @@ cost-отчёты и проактивный движок. Совместимос
 - [ ] `process_one_ui_command` — переименовать в `process_user_input`, убрать `UiCommand::Help/Mode/Focus/Scroll/Exit/Undo/Redo`
 - [ ] `UiCommand` — оставить только `Ask(String)`, `Script(String)`, `Shell(String)`, `Confirm`
 - [ ] `process_user_input` — последовательно: ScriptEngine → process_request (LLM) → shell (sh -c)
-- [ ] `ScriptEngine` — сделать доступным из `process_user_input` (сейчас он только внутри ask)
-- [ ] `exit` — переделать на `UiCommand::Shell("exit")` → `std::process::exit(0)` (единственный special case)
+- [x] `ScriptEngine` — сделать доступным из `process_user_input` (сейчас он только внутри ask)
+- [x] Зарегистрировать `terio_exit()` в Rhai-движке (рядом с `terio_execute`, `terio_confirm`, `terio_show`, `terio_config_get/set`)
+- [x] Добавить скрипт `exit.rhai` в core-скрипты при `terio init`
+- [x] `exit` — переделать на скрипт `exit.rhai`, убрать hardcoded `UiCommand::Exit`
+      - Регистрация `terio_exit()` в Rhai-движке (script/mod.rs)
+      - Создание `~/.terio/scripts/core/exit.rhai` с телом `terio_exit();`
+      - Установка при `terio init`, если ещё нет
+      - `UiCommand::Exit` удалить из enum
+      - `"exit"/"quit"` убрать из `parse_input` — попадает в pipeline как любой другой ввод
 - [ ] `help`/`mode`/etc — вынести в user-скрипты (создать core-скрипты после `terio init`)
 - [ ] UI (`app.rs`) — убрать локальные обработчики Help/Mode/Focus/Scroll, оставить только `on_submit` → `send_ui_command`
 - [ ] Проверить, что MockProvider не используется по умолчанию — если не настроен ollama, сразу shell fallback
