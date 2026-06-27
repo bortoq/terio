@@ -1,7 +1,7 @@
 // Window model: core abstraction for Phase 0 terminal-like UI.
 // Each result from terio is a Window. WindowManager manages the viewport.
 
-use crate::types::LogEntry;
+use crate::types::{LogEntry, LogEvent, TerioPrediction};
 use std::collections::VecDeque;
 
 /// Тип окна.
@@ -24,6 +24,23 @@ pub struct Window {
 }
 
 impl Window {
+    /// Create a window from a TerioPrediction.
+    pub fn from_tp(tp: &TerioPrediction, event_idx: usize, tp_idx: usize) -> Self {
+        let id = format!(
+            "{}-{:?}-{}",
+            tp.interaction_id.as_deref().unwrap_or("none"),
+            tp.kind,
+            (event_idx << 16) | tp_idx
+        );
+        let content = tp_content(tp);
+        Self {
+            id,
+            kind: WindowKind::Text(content),
+            created_at: tp.ts.clone(),
+        }
+    }
+
+    /// Legacy: create from raw LogEntry (for tests / backward compat).
     pub fn from_entry(entry: &LogEntry, idx: usize) -> Self {
         let id = format!(
             "{}-{:?}-{}",
@@ -38,6 +55,28 @@ impl Window {
             created_at: entry.ts.clone(),
         }
     }
+}
+
+fn tp_content(tp: &TerioPrediction) -> String {
+    let mut lines = Vec::new();
+    if let Some(ref cmd) = tp.command {
+        lines.push(format!("$ {}", cmd.display));
+    } else if let Some(ref desc) = tp.description {
+        lines.push(desc.clone());
+    } else if let Some(ref summary) = tp.prompt_summary {
+        lines.push(summary.clone());
+    }
+    if let Some(ref out) = tp.stdout_summary {
+        if !out.is_empty() {
+            lines.push(out.clone());
+        }
+    }
+    if let Some(ref err) = tp.stderr_summary {
+        if !err.is_empty() {
+            lines.push(format!("[stderr]\n{}", err));
+        }
+    }
+    lines.join("\n")
 }
 
 fn entry_content(entry: &LogEntry) -> String {
@@ -105,12 +144,18 @@ impl WindowManager {
         }
     }
 
-    /// Восстановить окна из записей лога.
-    pub fn from_log(entries: &[LogEntry]) -> Self {
+    /// Восстановить окна из событий лога (Phase 7).
+    pub fn from_log(entries: &[LogEvent]) -> Self {
         let windows: VecDeque<Window> = entries
             .iter()
             .enumerate()
-            .map(|(i, e)| Window::from_entry(e, i))
+            .flat_map(|(ei, event)| {
+                event
+                    .terio_predictions
+                    .iter()
+                    .enumerate()
+                    .map(move |(ti, tp)| Window::from_tp(tp, ei, ti))
+            })
             .collect();
         let count = windows.len();
         Self {
@@ -120,11 +165,13 @@ impl WindowManager {
         }
     }
 
-    /// Добавить новое окно (в конец).
-    pub fn push(&mut self, entry: LogEntry) {
-        let idx = self.windows.len();
-        let window = Window::from_entry(&entry, idx);
-        self.windows.push_back(window);
+    /// Добавить новое окно из события лога (в конец).
+    pub fn push(&mut self, event: &LogEvent) {
+        for (ti, tp) in event.terio_predictions.iter().enumerate() {
+            let _idx = self.windows.len();
+            let window = Window::from_tp(tp, self.windows.len(), ti);
+            self.windows.push_back(window);
+        }
         // Ограничение размера
         if self.windows.len() > self.max_visible {
             self.windows.pop_front();
@@ -179,9 +226,11 @@ mod tests {
 
     #[test]
     fn test_window_manager_push_and_focus() {
+        use crate::types::LogEvent;
         let mut mgr = WindowManager::new();
         let entry = LogEntry::new_system_event("i1", "s1", "hello");
-        mgr.push(entry);
+        let event = LogEvent::from_entry(&entry);
+        mgr.push(&event);
         assert_eq!(mgr.windows.len(), 1);
         assert!(mgr.focused_window().is_some());
     }
@@ -225,10 +274,17 @@ mod tests {
 
     #[test]
     fn test_focus_move_up_down() {
+        use crate::types::LogEvent;
         let mut mgr = WindowManager::new();
-        mgr.push(LogEntry::new_system_event("i1", "s1", "a"));
-        mgr.push(LogEntry::new_system_event("i1", "s1", "b"));
-        mgr.push(LogEntry::new_system_event("i1", "s1", "c"));
+        mgr.push(&LogEvent::from_entry(&LogEntry::new_system_event(
+            "i1", "s1", "a",
+        )));
+        mgr.push(&LogEvent::from_entry(&LogEntry::new_system_event(
+            "i1", "s1", "b",
+        )));
+        mgr.push(&LogEvent::from_entry(&LogEntry::new_system_event(
+            "i1", "s1", "c",
+        )));
         assert_eq!(mgr.focus_out, Some(2)); // focus on last
 
         mgr.focus_move("up");
@@ -246,11 +302,13 @@ mod tests {
 
     #[test]
     fn test_window_manager_from_log() {
+        use crate::types::LogEvent;
         let entries = vec![
             LogEntry::new_system_event("i1", "s1", "first"),
             LogEntry::new_system_event("i1", "s1", "second"),
         ];
-        let mgr = WindowManager::from_log(&entries);
+        let events: Vec<LogEvent> = entries.iter().map(|e| LogEvent::from_entry(e)).collect();
+        let mgr = WindowManager::from_log(&events);
         assert_eq!(mgr.windows.len(), 2);
         assert_eq!(mgr.focus_out, Some(1));
     }

@@ -27,6 +27,11 @@ pub trait LogReader: Send + Sync {
     fn by_session(&self, session_id: &str) -> Result<Vec<LogEntry>>;
     /// Записи по interaction_id.
     fn by_interaction(&self, interaction_id: &str) -> Result<Vec<LogEntry>>;
+    /// Последние N событий (сгруппированные LogEvent).
+    fn recent_events(&self, n: usize) -> Result<Vec<crate::types::LogEvent>> {
+        let entries = self.recent(n)?;
+        Ok(crate::types::LogEvent::group_entries(&entries))
+    }
 }
 
 /// LogStore — объединяет writer + reader + broadcast.
@@ -63,6 +68,10 @@ impl LogStore {
     /// Последние N записей.
     pub fn recent(&self, n: usize) -> Result<Vec<LogEntry>> {
         self.reader.recent(n)
+    }
+
+    pub fn recent_events(&self, n: usize) -> Result<Vec<crate::types::LogEvent>> {
+        self.reader.recent_events(n)
     }
 
     /// Подписка на in-memory stream.

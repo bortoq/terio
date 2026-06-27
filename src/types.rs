@@ -358,6 +358,133 @@ impl LogEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 7: LogEvent — событийная модель лога
+// ---------------------------------------------------------------------------
+
+/// Пользовательское предсказание: что пользователь хотел получить.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPrediction {
+    pub request: String,
+    pub interaction_id: Option<String>,
+    pub ts: String,
+    pub risk: Option<RiskLevel>,
+    pub attention_mode: Option<String>,
+}
+
+/// Предсказание terio: результат, показанный в окне.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerioPrediction {
+    pub kind: LogKind,
+    pub risk: Option<RiskLevel>,
+    pub status: Option<LogStatus>,
+    pub duration_ms: Option<u64>,
+    pub tokens_used: Option<u64>,
+    pub cache_hit: Option<bool>,
+    pub model_name: Option<String>,
+    pub cost_counters: CostCounters,
+    pub stdout_summary: Option<String>,
+    pub stderr_summary: Option<String>,
+    pub command: Option<CommandInfo>,
+    pub description: Option<String>,
+    pub plan: Option<serde_json::Value>,
+    pub prompt_summary: Option<String>,
+    pub ts: String,
+    pub interaction_id: Option<String>,
+}
+
+/// Событие лога — пара (UserPrediction, TerioPrediction).
+/// Каждое событие соответствует одному взаимодействию пользователя с terio.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEvent {
+    pub user_prediction: UserPrediction,
+    pub terio_predictions: Vec<TerioPrediction>,
+    pub ts: String,
+}
+
+impl LogEvent {
+    /// Создать LogEvent из одной LogEntry (1:1-отображение для Phase 7).
+    pub fn from_entry(entry: &LogEntry) -> Self {
+        let user_prediction = UserPrediction {
+            request: entry.request.clone().unwrap_or_default(),
+            interaction_id: entry.interaction_id.clone(),
+            ts: entry.ts.clone(),
+            risk: entry.risk.clone(),
+            attention_mode: None,
+        };
+        let terio_prediction = TerioPrediction {
+            kind: entry.kind.clone(),
+            risk: entry.risk.clone(),
+            status: entry.status.clone(),
+            duration_ms: entry.duration_ms,
+            tokens_used: entry.tokens_used,
+            cache_hit: entry.cache_hit,
+            model_name: entry.model_name.clone(),
+            cost_counters: entry.cost_counters.clone(),
+            stdout_summary: entry.stdout_summary.clone(),
+            stderr_summary: entry.stderr_summary.clone(),
+            command: entry.command.clone(),
+            description: entry.description.clone(),
+            plan: entry.plan.clone(),
+            prompt_summary: entry.prompt_summary.clone(),
+            ts: entry.ts.clone(),
+            interaction_id: entry.interaction_id.clone(),
+        };
+        Self {
+            user_prediction,
+            terio_predictions: vec![terio_prediction],
+            ts: entry.ts.clone(),
+        }
+    }
+
+    /// Группировка LogEntry -> Vec<LogEvent> по interaction_id
+    pub fn group_entries(entries: &[LogEntry]) -> Vec<Self> {
+        use std::collections::HashMap;
+        let mut events: Vec<Self> = Vec::new();
+        let mut pending: HashMap<String, Vec<LogEntry>> = HashMap::new();
+
+        for entry in entries {
+            if let Some(ref iid) = entry.interaction_id {
+                pending.entry(iid.clone()).or_default().push(entry.clone());
+            } else {
+                // No interaction_id — standalone event
+                events.push(Self::from_entry(entry));
+            }
+        }
+
+        // Merge pending groups
+        for (_iid, group) in pending.drain() {
+            if let Some(first) = group.first() {
+                let mut event = Self::from_entry(first);
+                event.terio_predictions = group
+                    .iter()
+                    .map(|e| TerioPrediction {
+                        kind: e.kind.clone(),
+                        risk: e.risk.clone(),
+                        status: e.status.clone(),
+                        duration_ms: e.duration_ms,
+                        tokens_used: e.tokens_used,
+                        cache_hit: e.cache_hit,
+                        model_name: e.model_name.clone(),
+                        cost_counters: e.cost_counters.clone(),
+                        stdout_summary: e.stdout_summary.clone(),
+                        stderr_summary: e.stderr_summary.clone(),
+                        command: e.command.clone(),
+                        description: e.description.clone(),
+                        plan: e.plan.clone(),
+                        prompt_summary: e.prompt_summary.clone(),
+                        ts: e.ts.clone(),
+                        interaction_id: e.interaction_id.clone(),
+                    })
+                    .collect();
+                events.push(event);
+            }
+        }
+
+        events
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AggregatedCosts
 // ---------------------------------------------------------------------------
 

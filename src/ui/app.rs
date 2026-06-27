@@ -161,9 +161,9 @@ fn app() -> Element {
     let _ = refresh_tick(); // force re-render (Dioxus reactivity)
 
     // Формируем окна из записей лога с persistent focus
-    let entries = get_entries();
-    let entry_count = entries.len();
-    let mut mgr = WindowManager::from_log(&entries);
+    let events = crate::types::LogEvent::group_entries(&get_entries());
+    let entry_count = events.len();
+    let mut mgr = WindowManager::from_log(&events);
 
     // Restore focus: если entry_count не изменился, храним фокус; если изменился — сброс в конец
     let mut restore_focus = None::<usize>;

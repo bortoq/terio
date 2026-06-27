@@ -47,10 +47,14 @@ impl ProactiveEngine {
     /// Загрузить модель из лога (последние N записей).
     pub fn load_from_log(log_dir: &Path, max_entries: usize) -> anyhow::Result<Self> {
         let reader = JsonlLogReader::new(log_dir);
-        let entries = reader.recent(max_entries)?;
+        let events = reader.recent_events(max_entries)?;
 
         let mut predictor = crate::accounting::BayesianPredictor::new();
-        let requests: Vec<String> = entries.iter().filter_map(|e| e.request.clone()).collect();
+        let requests: Vec<String> = events
+            .iter()
+            .map(|e| e.user_prediction.request.clone())
+            .filter(|r| !r.is_empty())
+            .collect();
         predictor.observe(&requests);
 
         // Загружаем счётчик авто-выполненных

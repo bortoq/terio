@@ -286,10 +286,10 @@ fn handle_run(
 
 fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     let reader = JsonlLogReader::new(log_dir);
-    let entries = reader.recent(usize::MAX)?;
+    let events = reader.recent_events(usize::MAX)?;
     let config = Config::load().unwrap_or_default();
 
-    // Per-entry complete cost computation
+    // Per-event complete cost computation
     let mut total_entries: u64 = 0;
     let mut total_tokens: u64 = 0;
     let mut total_llm_duration: u64 = 0;
@@ -300,33 +300,36 @@ fn handle_cost(log_dir: &std::path::Path) -> anyhow::Result<()> {
     let mut cache_misses: u64 = 0;
     let mut per_entry_breakdowns: Vec<terio::accounting::CostBreakdown> = Vec::new();
 
-    for entry in &entries {
-        let counters = &entry.cost_counters;
-        total_tokens += counters.llm_cost.tokens;
-        total_llm_duration += counters.llm_cost.duration_ms;
-        total_exec_duration += counters.execution_cost.duration_ms;
-        total_commands += counters.execution_cost.commands_executed;
-        if counters.cache_cost.hit {
-            cache_hits += 1;
-        } else {
-            cache_misses += 1;
-        }
-        if entry.request.is_some() {
+    for event in &events {
+        // Count non-empty user requests
+        if !event.user_prediction.request.is_empty() {
             count_requests += 1;
         }
-        // Per-entry complete cost: compute per-entry instead of mixing global + per-entry risk
-        let entry_risk = entry
-            .risk
-            .as_ref()
-            .unwrap_or(&terio::types::RiskLevel::ReadOnly);
-        let entry_cost = terio::accounting::compute_total_cost(
-            counters,
-            entry_risk,
-            counters.llm_cost.duration_ms,
-            &config.cost,
-        );
-        per_entry_breakdowns.push(entry_cost);
-        total_entries += 1;
+        for tp in &event.terio_predictions {
+            let counters = &tp.cost_counters;
+            total_tokens += counters.llm_cost.tokens;
+            total_llm_duration += counters.llm_cost.duration_ms;
+            total_exec_duration += counters.execution_cost.duration_ms;
+            total_commands += counters.execution_cost.commands_executed;
+            if counters.cache_cost.hit {
+                cache_hits += 1;
+            } else {
+                cache_misses += 1;
+            }
+            // Per-entry complete cost: compute per-entry instead of mixing global + per-entry risk
+            let entry_risk = tp
+                .risk
+                .as_ref()
+                .unwrap_or(&terio::types::RiskLevel::ReadOnly);
+            let entry_cost = terio::accounting::compute_total_cost(
+                counters,
+                entry_risk,
+                counters.llm_cost.duration_ms,
+                &config.cost,
+            );
+            per_entry_breakdowns.push(entry_cost);
+            total_entries += 1;
+        }
     }
 
     // Aggregate per-entry costs
@@ -1472,7 +1475,15 @@ fn process_one_ui_command(
         }
         UiCommand::Repeat => {
             let entries = store.recent(50)?;
-            let last_req = entries.iter().rev().find_map(|e| e.request.clone());
+            let events = terio::types::LogEvent::group_entries(&entries);
+            let last_req = events.iter().rev().find_map(|e| {
+                let r = e.user_prediction.request.clone();
+                if r.is_empty() {
+                    None
+                } else {
+                    Some(r)
+                }
+            });
             if let Some(request) = last_req {
                 append_system_event(identity, store, &format!("repeat: {request}"))?;
                 let config = Config::load().unwrap_or_default();
